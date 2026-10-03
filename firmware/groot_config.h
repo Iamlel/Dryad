@@ -19,8 +19,10 @@
  * clamped, so anything darker/drier than the low point reads 0 %. */
 #define GROOT_LIGHT_RAW_DARK      16    /* sensor covered by hand   -> 0 %   */
 #define GROOT_LIGHT_RAW_BRIGHT    4095  /* normal room light        -> 100 % */
-#define GROOT_MOISTURE_RAW_DRY    2048  /* least water in soil      -> 0 %   */
-#define GROOT_MOISTURE_RAW_WET    4000  /* most water in soil       -> 100 % */
+/* One-point calibration: soil at ~50 % moisture read 1481, and a dry probe
+ * reads ~0, so 50 % lands at 1481. Re-measure the extremes for more accuracy. */
+#define GROOT_MOISTURE_RAW_DRY    0     /* dry soil                 -> 0 %   */
+#define GROOT_MOISTURE_RAW_WET    4000  /* saturated soil           -> 100 % */
 
 /* ---- Sampling --------------------------------------------------------- */
 /* Readings are oversampled and averaged, so each report is a smooth mean
