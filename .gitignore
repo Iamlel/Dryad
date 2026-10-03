@@ -1,0 +1,15 @@
+# Binaries
+hello
+hello.exe
+*.exe
+*.o
+*.out
+
+# Environment and key files
+.env
+.env.*
+*.key
+*.token
+key.txt
+api_key.txt
+gemini_key.txt
