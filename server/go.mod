@@ -4,6 +4,8 @@ go 1.26.5
 
 require (
 	github.com/google/generative-ai-go v0.20.1
+	github.com/plexusone/elevenlabs-go v0.13.0
+	github.com/vmihailenco/msgpack/v5 v5.4.1
 	google.golang.org/api v0.300.0
 )
 
@@ -32,11 +34,11 @@ require (
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/ogen-go/ogen v1.22.0 // indirect
-	github.com/plexusone/elevenlabs-go v0.13.0 // indirect
 	github.com/plexusone/ogen-tools v0.3.0 // indirect
 	github.com/plexusone/omnivoice-core v0.14.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
+	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.67.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect

@@ -1,0 +1,17 @@
+# Runs the Groot server on the UNO Q's Linux side at boot.
+# Installed by `./deploy.sh install`; lives at /etc/systemd/system/groot.service.
+[Unit]
+Description=Groot plant server (MCU bridge + HTTP API)
+After=arduino-router.service network-online.target
+Wants=arduino-router.service network-online.target
+
+[Service]
+User=arduino
+WorkingDirectory=/home/arduino/groot
+ExecStart=/home/arduino/groot/groot -headless
+# deploy.sh swaps the binary and kills the process; this brings it back.
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

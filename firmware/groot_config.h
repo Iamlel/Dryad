@@ -43,8 +43,8 @@
 /* ---- Outputs ---------------------------------------------------------- */
 /* Print each report as a readable line on the monitor (sensor bring-up). */
 #define GROOT_PRINT_READINGS 1
-/* Send each report to the Linux side over RouterBridge. Nothing listens on
- * the Linux side yet, so this stays off until the relay exists. */
-#define GROOT_SEND_TO_LINUX  0
+/* Send each report to the Linux side over RouterBridge, where the Go
+ * server (server/bridge.go) registers GROOT_RPC_METHOD to receive it. */
+#define GROOT_SEND_TO_LINUX  1
 
 #endif /* GROOT_CONFIG_H */

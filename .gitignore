@@ -25,3 +25,5 @@ arduino_cache_*/
 
 # mac stuff
 .DS_Store
+# build output
+build/

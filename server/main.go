@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -178,7 +179,50 @@ func min(a, b int) int {
 	return b
 }
 
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func fmtPercent(v *float64) string {
+	if v == nil {
+		return "--"
+	}
+	return fmt.Sprintf("%.1f%%", *v*100)
+}
+
+func fmtCelsius(v *float64) string {
+	if v == nil {
+		return "--"
+	}
+	return fmt.Sprintf("%.2f C", *v)
+}
+
 func main() {
+	headless := flag.Bool("headless", false, "only run the sensor bridge + HTTP API, no chat prompt (used by the boot service)")
+	watch := flag.Bool("watch", false, "print every sensor reading as it arrives")
+	httpAddr := flag.String("http", envOr("GROOT_HTTP_ADDR", defaultHTTPAddr), "HTTP listen address")
+	routerAddr := flag.String("router", envOr("GROOT_ROUTER", defaultRouterAddr),
+		"arduino-router socket path, or tcp:host:port")
+	flag.Parse()
+
+	go RunBridge(*routerAddr)
+	if *watch {
+		go func() {
+			for r := range Sensors.Subscribe() {
+				fmt.Printf("#%-5d light %6s | moisture %6s | temp %8s  (%s)\n", r.Seq,
+					fmtPercent(r.Light), fmtPercent(r.Moisture), fmtCelsius(r.TemperatureC), r.Source)
+			}
+		}()
+	}
+	if *headless {
+		RunHTTP(*httpAddr) // only returns on failure; let systemd restart us
+		os.Exit(1)
+	}
+	go RunHTTP(*httpAddr)
+
 	geminiKey := getAPIKey()
 	if geminiKey == "" {
 		fmt.Println("Error: Gemini API key not found.")
