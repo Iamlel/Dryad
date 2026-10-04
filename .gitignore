@@ -1,6 +1,4 @@
 # Binaries
-hello
-hello.exe
 *.exe
 *.o
 *.out
@@ -13,4 +11,19 @@ hello.exe
 key.txt
 api_key.txt
 gemini_key.txt
+
+.idea/
+cmake-build-*/
+
+#arduino stuff
+arduino_build_*/
+arduino_cache_*/
+*.hex
+*.elf
+*.bin
+*.eep
+
+# mac stuff
 .DS_Store
+# build output
+build/
