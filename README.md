@@ -11,7 +11,7 @@ Needs `go`, `arduino-cli` and `adb` on your machine, and the board on adb
 
 ```bash
 ./deploy.sh all        # flash the MCU + build/push the server
-./deploy.sh install    # once: start the server on every boot (asks for the board's password)
+./deploy.sh install    # once: start the server now and on every boot (no password needed)
 ./deploy.sh            # after changing server code: rebuild, push, restart
 ./deploy.sh watch      # live sensor readings
 ./deploy.sh logs       # server log
