@@ -6,10 +6,12 @@ package main
 //	GET /api/plant        the same with default houseplant thresholds
 //	GET /api/plants       every plant
 //	GET /api/sensors      the latest raw reading
+//	GET /api/caretaker    the caretaker's wallet and the rewards paid
+//	POST /api/caretaker   set the caretaker's wallet
 //	GET /healthz          liveness and the deployed version
 //
-// It only reads; plants are added with plants.sql. Errors are JSON:
-// {"error": "..."}.
+// Apart from the caretaker, it only reads; plants are added with
+// plants.sql. Errors are JSON: {"error": "..."}.
 
 import (
 	"encoding/json"
@@ -27,6 +29,7 @@ var version = "dev"
 type server struct {
 	sensors *LatestReading
 	plants  *PlantStore
+	rewards *Rewards
 }
 
 // startPlantServer starts the sensor bridge and the HTTP API in the
@@ -37,8 +40,13 @@ func startPlantServer() <-chan error {
 	if err != nil {
 		log.Fatalf("plants: bad TIGER_DATABASE_URL: %v", err)
 	}
-	s := &server{sensors: new(LatestReading), plants: plants}
+	rewards, err := newRewards(envOr("SOLANA_TREASURY_KEY", loadKeyFromEnvFile(".env", "SOLANA_TREASURY_KEY")))
+	if err != nil {
+		log.Fatalf("rewards: bad SOLANA_TREASURY_KEY: %v", err)
+	}
+	s := &server{sensors: new(LatestReading), plants: plants, rewards: rewards}
 	go runBridge(envOr("GROOT_ROUTER", defaultRouterAddr), s.sensors)
+	go rewards.watch(s.sensors)
 
 	httpServer := &http.Server{
 		Addr:              envOr("GROOT_HTTP_ADDR", ":8080"),
@@ -61,6 +69,8 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/plant/{id}", s.getPlantState)
 	mux.HandleFunc("GET /api/plants", s.listPlants)
 	mux.HandleFunc("GET /api/sensors", s.getSensors)
+	mux.HandleFunc("GET /api/caretaker", s.getCaretaker)
+	mux.HandleFunc("POST /api/caretaker", s.setCaretaker)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
 	})
@@ -136,6 +146,46 @@ func (s *server) getSensors(w http.ResponseWriter, r *http.Request) {
 		Reading
 		Stale bool `json:"stale"`
 	}{reading, reading.Stale()})
+}
+
+// ---- Caretaker rewards -----------------------------------------------------
+
+func (s *server) getCaretaker(w http.ResponseWriter, r *http.Request) {
+	if !s.rewards.On() {
+		writeError(w, http.StatusServiceUnavailable, errRewardsOff.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, s.rewards.State())
+}
+
+// setCaretaker takes {"wallet": "<Solana address>", "plant_id": "fern"}.
+// Without a plant_id, the watering is judged by the default thresholds.
+func (s *server) setCaretaker(w http.ResponseWriter, r *http.Request) {
+	if !s.rewards.On() {
+		writeError(w, http.StatusServiceUnavailable, errRewardsOff.Error())
+		return
+	}
+	var req struct {
+		Wallet  string `json:"wallet"`
+		PlantID string `json:"plant_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, `send JSON: {"wallet": "<Solana address>", "plant_id": "fern"}`)
+		return
+	}
+	p := defaultPlant
+	if req.PlantID != "" {
+		var err error
+		if p, err = s.plants.Get(r.Context(), strings.ToLower(req.PlantID)); err != nil {
+			writePlantError(w, err)
+			return
+		}
+	}
+	if err := s.rewards.SetCaretaker(req.Wallet, p); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, s.rewards.State())
 }
 
 // ---- Helpers ---------------------------------------------------------------
