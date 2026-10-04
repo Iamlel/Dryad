@@ -19,12 +19,14 @@ if urlsplit(BASE).scheme not in ('http', 'https') or not urlsplit(BASE).hostname
     raise ValueError('BACKEND_URL must be an HTTP or HTTPS base URL')
 
 
-def upstream(path, recording=None, content_type=None):
-    """Fixed GET routes, plus POSTing a voice recording to talk to a plant;
-    sensor writes are intentionally absent."""
+def upstream(path, recording=None, content_type=None, payload=None):
+    """Fixed GET routes, plus POSTing a voice recording to talk to a plant or
+    a caretaker's wallet (payload, as JSON); sensor writes are intentionally absent."""
     try:
         auth = {'Authorization': 'Bearer ' + TOKEN} if TOKEN else {}
-        if recording is None:
+        if payload is not None:
+            response = requests.post(BASE + path, json=payload, headers=auth, timeout=(3, 4), allow_redirects=False)
+        elif recording is None:
             response = requests.get(BASE + path, headers=auth, timeout=(3, 4), allow_redirects=False)
         else:
             response = requests.post(BASE + path, data=recording,
@@ -81,6 +83,43 @@ def generic_plant():
 @app.get('/api/sensors')
 def sensors():
     return upstream('/api/sensors')
+
+
+def valid_wallet(wallet):
+    # A Solana public address is Base58 encoding of exactly 32 bytes.
+    alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+    if not isinstance(wallet, str) or not 32 <= len(wallet) <= 44:
+        return False
+    value = 0
+    for char in wallet:
+        if char not in alphabet:
+            return False
+        value = value * 58 + alphabet.index(char)
+    leading = len(wallet) - len(wallet.lstrip('1'))
+    return value != 0 and leading + (value.bit_length() + 7) // 8 == 32
+
+
+@app.route('/api/caretaker', methods=['GET', 'POST'])
+def caretaker():
+    if request.method == 'GET':
+        return upstream('/api/caretaker')
+    # A custom header plus JSON requires a cross-origin browser preflight.
+    # This app does not grant CORS access. Works behind HTTPS tunnels too.
+    if (request.headers.get('X-Dryad-Request') != 'caretaker'
+            or request.headers.get('Sec-Fetch-Site') == 'cross-site'):
+        return jsonify(error='Save the wallet from the Dryad website.'), 403
+    if not request.is_json:
+        return jsonify(error='Send a JSON wallet and plant_id.'), 415
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or set(body) != {'wallet', 'plant_id'}:
+        return jsonify(error='Send only wallet and plant_id.'), 400
+    wallet = body['wallet'].strip() if isinstance(body['wallet'], str) else ''
+    plant_id = body['plant_id']
+    if not valid_wallet(wallet):
+        return jsonify(error='Enter a valid Solana public wallet address.'), 400
+    if not isinstance(plant_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', plant_id):
+        return jsonify(error='Choose a plant first.'), 400
+    return upstream('/api/caretaker', payload={'wallet': wallet, 'plant_id': plant_id})
 
 
 @app.get('/api/backend-health')
