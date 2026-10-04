@@ -164,7 +164,7 @@ func NewLMStudioBackend(baseURL, modelName string) *LMStudioBackend {
 	if modelName == "" {
 		modelName = os.Getenv("LM_STUDIO_MODEL")
 		if modelName == "" {
-			modelName = "google/gemma-4-e4b"
+			modelName = "llama-3.2-3b-instruct"
 		}
 	}
 
