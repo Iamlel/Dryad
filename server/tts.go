@@ -13,10 +13,14 @@ import (
 )
 
 // Default premade ElevenLabs voice IDs for standard characters
+// Uses premade voices that are fully supported on ElevenLabs free tier accounts
 const (
 	DefaultVoiceSpike = "pNInz6obpgDQGcFmaJgB" // Adam - deep, stoic, dry
-	DefaultVoiceFern  = "21m00Tcm4TlvDq8ikWAM" // Rachel - expressive, emotive
+	DefaultVoiceFern  = "cgSgspJ2msm6clMCkdW9" // Jessica - playful, bright, warm
 )
+
+// LegacyLibraryVoiceRachel is a community library voice that causes 402 Payment Required on free tier
+const LegacyLibraryVoiceRachel = "21m00Tcm4TlvDq8ikWAM"
 
 // TTSManager handles text-to-speech conversion and playback.
 type TTSManager struct {
@@ -39,10 +43,40 @@ func NewTTSManager(apiKey string) (*TTSManager, error) {
 	return &TTSManager{client: client}, nil
 }
 
+// CleanSpokenText strips markdown symbols and persona prefixes so the voice sounds natural.
+func CleanSpokenText(name, text string) string {
+	cleaned := strings.TrimSpace(text)
+
+	// Remove persona name prefixes like "Fern: " or "**Fern**: "
+	prefixes := []string{
+		name + ":",
+		"**" + name + "**:",
+		"*" + name + "*:",
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(strings.ToLower(cleaned), strings.ToLower(p)) {
+			cleaned = strings.TrimSpace(cleaned[len(p):])
+			break
+		}
+	}
+
+	// Remove markdown asterisks (e.g. bold or italic notation)
+	cleaned = strings.ReplaceAll(cleaned, "**", "")
+	cleaned = strings.ReplaceAll(cleaned, "*", "")
+	return strings.TrimSpace(cleaned)
+}
+
 // ResolveVoiceID returns the voice ID for a given personality.
 func ResolveVoiceID(p *Personality) string {
-	if strings.TrimSpace(p.VoiceID) != "" {
-		return p.VoiceID
+	voice := strings.TrimSpace(p.VoiceID)
+
+	// If using the legacy library voice that requires paid subscription, redirect to Jessica
+	if voice == LegacyLibraryVoiceRachel {
+		return DefaultVoiceFern
+	}
+
+	if voice != "" {
+		return voice
 	}
 
 	// Match by ID or Name defaults
@@ -52,14 +86,14 @@ func ResolveVoiceID(p *Personality) string {
 	case "fern":
 		return DefaultVoiceFern
 	default:
-		// Default to Rachel if not matched
+		// Default to Jessica if not matched
 		return DefaultVoiceFern
 	}
 }
 
 // Speak converts text into speech and plays it through the system's audio output.
 func (tm *TTSManager) Speak(ctx context.Context, p *Personality, text string) error {
-	cleanText := strings.TrimSpace(text)
+	cleanText := CleanSpokenText(p.Name, text)
 	if cleanText == "" {
 		return nil
 	}
@@ -67,6 +101,18 @@ func (tm *TTSManager) Speak(ctx context.Context, p *Personality, text string) er
 	voiceID := ResolveVoiceID(p)
 
 	audioStream, err := tm.client.TTS().Simple(ctx, voiceID, cleanText)
+	if err != nil {
+		// If custom voice failed (e.g. library voice requiring paid plan), attempt fallback
+		fallbackID := DefaultVoiceFern
+		if strings.EqualFold(p.ID, "spike") {
+			fallbackID = DefaultVoiceSpike
+		}
+		if voiceID != fallbackID {
+			fmt.Printf("⚠️  [Voice %s failed (%v); falling back to default voice]\n", voiceID, err)
+			audioStream, err = tm.client.TTS().Simple(ctx, fallbackID, cleanText)
+		}
+	}
+
 	if err != nil {
 		return fmt.Errorf("TTS generation failed: %w", err)
 	}
