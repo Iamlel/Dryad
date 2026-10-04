@@ -37,7 +37,7 @@ function renderRoster() {
   }
 }
 function showPlant() {
-  text('plant-name',plant().name);text('talk-name',plant().name);text('tagline','A woodland spirit watching over '+plant().name+'.');
+  text('plant-name',plant().name);text('talk-name',plant().name);text('wallet-plant',plant().name);text('tagline','A woodland spirit watching over '+plant().name+'.');
   $('qr-link').href='/qr/'+encodeURIComponent(selected)+'.png';$('qr-link').hidden=false;
   $('ranges').replaceChildren();
   const p=plant(), range=(a,b,unit)=>number(a)&&number(b)?`${a}–${b}${unit}`:'Not provided';
@@ -131,7 +131,7 @@ async function poll() {
   }catch(e){if(g===generation){document.body.classList.add('stale');text('mode','◌ Disconnected');text('environment','Connection unavailable');text('report-time','Connection lost: the last report may be outdated.');notify(e.name==='AbortError'?'Request timed out. Retrying automatically.':e.message,true);}}
   finally{clearTimeout(timeout);if(g===generation)timer=setTimeout(poll,POLL_MS);}
 }
-$('refresh').onclick=()=>{listUpdated=0;poll();};
+$('refresh').onclick=()=>{listUpdated=0;poll();pollCaretaker();};
 function qrID(raw){let v=raw.trim();if(v.startsWith('dryad:')||v.startsWith('groot:'))v=v.slice(6);else if(v.startsWith('{'))v=JSON.parse(v).plant_id;else if(/^https?:/.test(v))v=new URL(v).searchParams.get('plant');if(typeof v!=='string'||!/^[A-Za-z0-9_-]{1,64}$/.test(v))throw Error('Use a plant ID, dryad:ID, or a URL containing ?plant=ID.');return v;}
 function closeCamera(){scannerGeneration++;clearTimeout(cameraTimer);cameraStream?.getTracks().forEach(t=>t.stop());cameraStream=null;$('camera').srcObject=null;}
 $('scanner').addEventListener('close',closeCamera);$('close-scan').onclick=()=>$('scanner').close();
@@ -217,5 +217,61 @@ $('talk').onclick=async()=>{
   }catch(e){text('talk-status',e.name==='NotAllowedError'?'Microphone permission was denied.':e.message);}
 };
 
-window.addEventListener('pagehide',()=>{closeCamera();controller?.abort();clearTimeout(timer);if(recorder?.state==='recording')recorder.stop();});
-poll();
+// Grove keeper: save a Solana wallet as the plants' caretaker. Watering a
+// thirsty plant back into its range earns that wallet 0.01 test SOL (devnet);
+// the rewards list refreshes every 10 seconds, so a new one shows up soon after.
+const CARETAKER_POLL_MS=10000;
+let caretakerTimer,walletNote=null; // walletNote: the last save's result, shown until the next save
+const shortWallet=w=>w.length>12?w.slice(0,4)+'…'+w.slice(-4):w;
+const plantName=id=>plants.find(p=>p.id===id)?.name||id||'the default ranges';
+function walletStatus(message,error=false){text('wallet-status',message);$('wallet-status').classList.toggle('wallet-error',error);}
+function renderCaretaker(c){
+  if(!c||typeof c!=='object'||typeof c.wallet!=='string'||!Array.isArray(c.payouts))throw Error('Unexpected caretaker response from the API.');
+  const mine=c.payouts.filter(p=>p.wallet===c.wallet),earned=mine.reduce((sum,p)=>sum+(number(p.sol)?p.sol:0),0);
+  $('current-caretaker').hidden=!c.wallet;
+  text('current-caretaker',!c.wallet?'':`Current caretaker: ${shortWallet(c.wallet)} for ${plantName(c.plant_id)}`+(mine.length?` · earned ${+earned.toFixed(4)} test SOL from ${mine.length} watering${mine.length===1?'':'s'}`:''));
+  $('payouts').replaceChildren();
+  for(const p of c.payouts.slice(0,10)){
+    const li=document.createElement('li'),what=document.createElement('strong'),when=document.createElement('span'),at=Date.parse(p.at);
+    what.textContent=`${number(p.sol)?p.sol:'?'} test SOL to ${shortWallet(String(p.wallet))}`;
+    when.textContent=Number.isFinite(at)?new Date(at).toLocaleString():'';li.append(what,when);
+    // Only ever link to the Solana Explorer.
+    if(typeof p.explorer_url==='string'&&p.explorer_url.startsWith('https://explorer.solana.com/tx/')){
+      const a=document.createElement('a');a.href=p.explorer_url;a.target='_blank';a.rel='noopener';a.textContent='View on Solana Explorer ↗';li.append(a);
+    }
+    $('payouts').append(li);
+  }
+  if(!c.payouts.length){const li=document.createElement('li');li.textContent='No rewards yet. Water a thirsty plant back into its range to earn one.';$('payouts').append(li);}
+}
+async function pollCaretaker(){
+  clearTimeout(caretakerTimer);
+  try{
+    const c=await api('/api/caretaker');renderCaretaker(c);
+    if(walletNote&&!walletNote.error&&!c.wallet)walletNote=null; // the server restarted and forgot the wallet
+    if(walletNote)walletStatus(walletNote.message,walletNote.error);
+    else walletStatus(c.wallet?'Rewards are on.':'Rewards are on. Save a wallet to start earning.');
+  }catch(e){walletStatus(sentence(e.message),true);}
+  finally{caretakerTimer=setTimeout(pollCaretaker,CARETAKER_POLL_MS);}
+}
+$('wallet-form').onsubmit=async e=>{
+  e.preventDefault();
+  const wallet=$('wallet-address').value.trim(),id=selected;
+  if(!id)walletNote={message:'Choose a plant first.',error:true};
+  else if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet))walletNote={message:'That doesn’t look like a Solana address. Paste the public address from your wallet app.',error:true};
+  else{
+    $('save-wallet').disabled=true;walletStatus('Saving…');
+    try{
+      const r=await fetch('/api/caretaker',{method:'POST',cache:'no-store',body:JSON.stringify({wallet,plant_id:id}),
+        headers:{'Content-Type':'application/json','X-Dryad-Request':'caretaker'}});
+      let data;try{data=await r.json();}catch{throw Error('The server returned an unreadable response.');}
+      if(!r.ok)throw Error(data.error||`Request failed (${r.status})`);
+      renderCaretaker(data);
+      walletNote={message:`Saved. Water ${plantName(id)} when it’s thirsty to earn 0.01 test SOL.`,error:false};
+    }catch(err){walletNote={message:sentence(err.message),error:true};}
+    finally{$('save-wallet').disabled=false;}
+  }
+  walletStatus(walletNote.message,walletNote.error);
+};
+
+window.addEventListener('pagehide',()=>{closeCamera();controller?.abort();clearTimeout(timer);clearTimeout(caretakerTimer);if(recorder?.state==='recording')recorder.stop();});
+poll();pollCaretaker();
