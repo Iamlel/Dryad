@@ -6,3 +6,11 @@
 .plant-status p{font-size:14px;line-height:1.8;white-space:pre-wrap}.status-label{display:inline-block;padding:8px 15px;margin:0 0 16px;border:1px solid var(--line);border-radius:30px;background:var(--hero);font-weight:800;font-size:14px}.status-label[data-status=offline]{background:#e8ddc5;color:#6b5035}
 .plant-status h3{font-size:12px;color:var(--muted);margin-top:24px}dl{display:grid;grid-template-columns:1fr auto;gap:12px;font-size:12px}dt{color:var(--muted)}dd{margin:0;font-weight:800}.journal-note{margin-top:22px}.journal-note p{font-size:13px;line-height:1.7;color:var(--muted)}.stale .metrics{opacity:.65}.stale .character img{animation:none}.chart-row svg{height:76px}
 @media(max-width:720px){.hero{min-height:340px}.character img{width:175px;right:-27px;bottom:0}.hero h2{font-size:44px}.brand{font-size:30px}}
+
+/* Caretaker wallet: inherits the grove's live light and climate colors. */
+.caretaker{margin-top:22px}.caretaker>p{font-size:13px;line-height:1.7}.caretaker h3{font-size:15px;margin:24px 0 8px}
+#wallet-form{display:block}#wallet-form label{display:block;font-size:12px;margin:14px 0 8px}.wallet-fields{display:flex;gap:10px}.wallet-fields input{width:100%}
+.current-caretaker,.payouts li{overflow-wrap:anywhere}.current-caretaker{background:var(--hero);padding:12px;border-radius:12px}
+#wallet-status{font-size:13px}.wallet-error{color:#ad462c}body.night .wallet-error{color:#ffc2a7}
+.payouts{list-style:none;margin:0;padding:0}.payouts li{display:grid;gap:7px;border-top:1px solid var(--line);padding:14px 0;font-size:12px}.payouts a{color:var(--ink);width:fit-content}
+@media(max-width:720px){.wallet-fields{flex-direction:column}.wallet-fields button{width:100%}.caretaker{min-width:0}}

@@ -1,4 +1,4 @@
-"""Dryad: read-only Flask gateway to the team's Plant API."""
+"""Dryad: Flask gateway to the team's Plant API."""
 import io
 import os
 import re
@@ -8,20 +8,23 @@ from urllib.parse import urlsplit
 import qrcode
 import requests
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, send_file
+from flask import Flask, jsonify, render_template, send_file, request
 
 load_dotenv(Path(__file__).with_name('.env'))
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 4096
 BASE = os.getenv('BACKEND_URL', 'http://127.0.0.1:8080').rstrip('/')
 TOKEN = os.getenv('BACKEND_TOKEN', '')
 if urlsplit(BASE).scheme not in ('http', 'https') or not urlsplit(BASE).hostname:
     raise ValueError('BACKEND_URL must be an HTTP or HTTPS base URL')
 
 
-def upstream(path):
-    """Only fixed GET routes are exposed; sensor writes are intentionally absent."""
+def upstream(path, payload=None):
+    """Proxy fixed API routes; credentials remain on the Flask server."""
     try:
-        response = requests.get(BASE + path,
+        send = requests.get if payload is None else requests.post
+        response = send(BASE + path,
+            **({} if payload is None else {'json': payload}),
             headers={'Authorization': 'Bearer ' + TOKEN} if TOKEN else {},
             timeout=(3, 4), allow_redirects=False)
         if 300 <= response.status_code < 400:
@@ -71,6 +74,48 @@ def generic_plant():
 @app.get('/api/sensors')
 def sensors():
     return upstream('/api/sensors')
+
+
+def valid_wallet(wallet):
+    # A Solana public address is Base58 encoding of exactly 32 bytes.
+    alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+    if not isinstance(wallet, str) or not 32 <= len(wallet) <= 44:
+        return False
+    value = 0
+    for char in wallet:
+        if char not in alphabet:
+            return False
+        value = value * 58 + alphabet.index(char)
+    leading = len(wallet) - len(wallet.lstrip('1'))
+    return value != 0 and leading + (value.bit_length() + 7) // 8 == 32
+
+
+@app.errorhandler(413)
+def too_large(_):
+    return jsonify(error='Request is too large.'), 413
+
+
+@app.route('/api/caretaker', methods=['GET', 'POST'])
+def caretaker():
+    if request.method == 'GET':
+        return upstream('/api/caretaker')
+    # A custom header plus JSON requires a cross-origin browser preflight.
+    # This app does not grant CORS access. Works behind HTTPS tunnels too.
+    if (request.headers.get('X-Dryad-Request') != 'caretaker'
+            or request.headers.get('Sec-Fetch-Site') == 'cross-site'):
+        return jsonify(error='Save the wallet from the Dryad website.'), 403
+    if not request.is_json:
+        return jsonify(error='Send a JSON wallet and plant_id.'), 415
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or set(body) != {'wallet', 'plant_id'}:
+        return jsonify(error='Send only wallet and plant_id.'), 400
+    wallet = body['wallet'].strip() if isinstance(body['wallet'], str) else ''
+    plant_id = body['plant_id']
+    if not valid_wallet(wallet):
+        return jsonify(error='Enter a valid Solana public wallet address.'), 400
+    if not isinstance(plant_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', plant_id):
+        return jsonify(error='Choose a plant first.'), 400
+    return upstream('/api/caretaker', {'wallet': wallet, 'plant_id': plant_id})
 
 
 @app.get('/api/backend-health')
