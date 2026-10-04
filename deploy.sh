@@ -20,7 +20,7 @@ server() {
     echo "==> building server (linux/arm64)"
     mkdir -p build
     (cd server && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-        go build -trimpath -ldflags="-s -w" -o ../build/groot .)
+        go build -trimpath -ldflags="-s -w -X main.version=$(git describe --always --dirty)" -o ../build/groot .)
 
     echo "==> pushing to $REMOTE_DIR"
     adb shell "mkdir -p $REMOTE_DIR"
@@ -36,14 +36,33 @@ server() {
     adb shell "mv $REMOTE_DIR/groot.new $REMOTE_DIR/groot && chmod +x $REMOTE_DIR/groot"
 
     if adb shell "systemctl is-enabled --quiet groot 2>/dev/null"; then
+        local old_pid
+        old_pid=$(server_pid)
         adb shell "pkill -x groot || true"
-        sleep 3
-        adb shell "systemctl is-active --quiet groot" &&
-            echo "==> running. http://$(board_ip):8080/api/sensors" ||
-            { echo "service failed to start, see ./deploy.sh logs" >&2; exit 1; }
+        wait_healthy "$old_pid"
     else
         echo "==> pushed. Run './deploy.sh install' once so it starts on boot."
     fi
+}
+
+server_pid() { adb shell "pidof groot || true" | tr -d '\r'; }
+
+# wait_healthy <old pid>: wait until a new server process answers /healthz.
+wait_healthy() {
+    local pid health
+    echo "==> waiting for the server to start"
+    for _ in $(seq 30); do
+        pid=$(server_pid)
+        if [[ -n "$pid" && "$pid" != "$1" ]] &&
+            health=$(adb shell "curl -fsS -m 2 localhost:8080/healthz" 2>/dev/null); then
+            echo "==> running: $health"
+            echo "==> http://$(board_ip):8080/api/plants"
+            return
+        fi
+        sleep 0.5
+    done
+    echo "the server didn't start, see ./deploy.sh logs" >&2
+    exit 1
 }
 
 firmware() {
@@ -57,11 +76,13 @@ firmware() {
 
 install() {
     adb push deploy/groot.service /tmp/groot.service >/dev/null
+    local old_pid
+    old_pid=$(server_pid)
     echo "==> installing boot service (enter the board's password if asked)"
     adb shell -t "sudo install -m 644 /tmp/groot.service /etc/systemd/system/groot.service \
         && sudo systemctl daemon-reload && sudo systemctl enable --now groot \
         && sudo systemctl restart groot"
-    echo "==> installed. http://$(board_ip):8080/api/sensors"
+    wait_healthy "$old_pid"
 }
 
 board_ip() {

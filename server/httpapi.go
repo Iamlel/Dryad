@@ -1,85 +1,172 @@
 package main
 
-// HTTP API on the board's WiFi address, so anyone on the network can reach
-// the plant without a laptop in between.
+// The HTTP API, on port 8080 of the board's WiFi address:
 //
-//   GET  /api/sensors   latest reading (503 until the first one arrives)
-//   POST /api/sensors   push a reading in from somewhere other than the Bridge
-//                       (testing without hardware, another device, ...)
-//   GET  /healthz       "ok"
+//	GET /api/plant/{id}   a plant's readings, status and dialog (for the UI)
+//	GET /api/plant        the same with default houseplant thresholds
+//	GET /api/plants       every plant
+//	GET /api/sensors      the latest raw reading
+//	GET /healthz          liveness and the deployed version
+//
+// It only reads; plants are added with plants.sql. Errors are JSON:
+// {"error": "..."}.
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
-const defaultHTTPAddr = ":8080"
+// version is set at build time by deploy.sh.
+var version = "dev"
 
-// staleAfter: no report for this long means the MCU or router has stopped.
-const staleAfter = 10 * time.Second
-
-// HTTPMux is exported so other handlers (e.g. chat) can be added to it.
-var HTTPMux = http.NewServeMux()
-
-func init() {
-	HTTPMux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ok\n"))
-	})
-	HTTPMux.HandleFunc("GET /api/sensors", getSensors)
-	HTTPMux.HandleFunc("POST /api/sensors", postSensors)
+type server struct {
+	sensors *LatestReading
+	plants  *PlantStore
 }
 
-// RunHTTP serves HTTPMux; it only returns if the listener fails.
-func RunHTTP(addr string) {
-	log.Printf("http: listening on %s", addr)
-	if err := http.ListenAndServe(addr, HTTPMux); err != nil {
-		log.Printf("http: %v", err)
+// startPlantServer starts the sensor bridge and the HTTP API in the
+// background. The returned channel receives the HTTP server's error if it
+// ever stops.
+func startPlantServer() <-chan error {
+	plants, err := openPlantStore(envOr("TIGER_DATABASE_URL", loadKeyFromEnvFile(".env", "TIGER_DATABASE_URL")))
+	if err != nil {
+		log.Fatalf("plants: bad TIGER_DATABASE_URL: %v", err)
 	}
+	s := &server{sensors: new(LatestReading), plants: plants}
+	go runBridge(envOr("GROOT_ROUTER", defaultRouterAddr), s.sensors)
+
+	httpServer := &http.Server{
+		Addr:              envOr("GROOT_HTTP_ADDR", ":8080"),
+		Handler:           allowCORS(s.routes()),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	errc := make(chan error, 1)
+	go func() {
+		log.Printf("http: listening on %s (version %s)", httpServer.Addr, version)
+		err := httpServer.ListenAndServe()
+		log.Printf("http: %v", err)
+		errc <- err
+	}()
+	return errc
 }
 
-func getSensors(w http.ResponseWriter, r *http.Request) {
-	reading, ok := Sensors.Latest()
-	if !ok {
-		http.Error(w, "no sensor reading yet", http.StatusServiceUnavailable)
+func (s *server) routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/plant", s.getPlantState)
+	mux.HandleFunc("GET /api/plant/{id}", s.getPlantState)
+	mux.HandleFunc("GET /api/plants", s.listPlants)
+	mux.HandleFunc("GET /api/sensors", s.getSensors)
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
+	})
+	return mux
+}
+
+// ---- Plants ----------------------------------------------------------------
+
+// plantState is what GET /api/plant/{id} returns. The UI reads these names.
+type plantState struct {
+	MoisturePct  *float64   `json:"moisture_pct"`
+	TemperatureC *float64   `json:"temperature_c"`
+	LightPct     *float64   `json:"light_pct"`
+	Status       string     `json:"status"`
+	Dialog       string     `json:"dialog"`
+	Stale        bool       `json:"stale"`
+	UpdatedAt    *time.Time `json:"updated_at"`
+}
+
+func (s *server) getPlantState(w http.ResponseWriter, r *http.Request) {
+	p := defaultPlant
+	if id := r.PathValue("id"); id != "" {
+		var err error
+		if p, err = s.plants.Get(r.Context(), strings.ToLower(id)); err != nil {
+			writePlantError(w, err)
+			return
+		}
+	}
+
+	reading, ok := s.sensors.Get()
+	state := plantState{Status: p.Status(reading, ok)}
+	state.Dialog = dialog(p, state.Status)
+	if ok {
+		state.MoisturePct, state.TemperatureC, state.LightPct = reading.MoisturePct, reading.TemperatureC, reading.LightPct
+		state.Stale, state.UpdatedAt = reading.Stale(), &reading.ReceivedAt
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+
+func (s *server) listPlants(w http.ResponseWriter, r *http.Request) {
+	plants, err := s.plants.List(r.Context())
+	if err != nil {
+		writePlantError(w, err)
 		return
 	}
-	age := time.Since(reading.ReceivedAt)
+	writeJSON(w, http.StatusOK, plants)
+}
+
+func writePlantError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errPlantNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, errNoDatabase), errors.Is(err, errNoTable):
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, errDBUnavailable):
+		log.Printf("plants: %v", err)
+		writeError(w, http.StatusServiceUnavailable, errDBUnavailable.Error())
+	default:
+		log.Printf("plants: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+	}
+}
+
+// ---- Sensors ---------------------------------------------------------------
+
+func (s *server) getSensors(w http.ResponseWriter, r *http.Request) {
+	reading, ok := s.sensors.Get()
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "no sensor reading yet")
+		return
+	}
 	writeJSON(w, http.StatusOK, struct {
 		Reading
-		AgeSeconds float64 `json:"age_seconds"`
-		Stale      bool    `json:"stale"`
-	}{reading, age.Seconds(), age > staleAfter})
+		Stale bool `json:"stale"`
+	}{reading, reading.Stale()})
 }
 
-func postSensors(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Seq          uint32   `json:"seq"`
-		UptimeMS     uint32   `json:"uptime_ms"`
-		Light        *float64 `json:"light"`
-		Moisture     *float64 `json:"moisture"`
-		TemperatureC *float64 `json:"temperature_c"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in); err != nil {
-		http.Error(w, "bad JSON: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	reading := Reading{
-		Seq:          in.Seq,
-		UptimeMS:     in.UptimeMS,
-		Light:        in.Light,
-		Moisture:     in.Moisture,
-		TemperatureC: in.TemperatureC,
-		ReceivedAt:   time.Now(),
-		Source:       "http",
-	}
-	Sensors.Publish(reading)
-	writeJSON(w, http.StatusOK, reading)
-}
+// ---- Helpers ---------------------------------------------------------------
 
-func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// allowCORS lets a page served from elsewhere (e.g. the Flask UI) call the
+// API from the browser.
+func allowCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions { // preflight
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
