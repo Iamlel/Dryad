@@ -104,11 +104,11 @@ func toggleOrSelectBackend(scanner *bufio.Scanner, current AIBackend, gemini *Ge
 	fmt.Println(" Switch AI Backend:")
 	fmt.Println("----------------------------------------")
 	if gemini != nil {
-		fmt.Printf("  [1] ☁️  Google Gemini (%s)\n", gemini.ModelName())
+		fmt.Printf("  [1] Google Gemini (%s)\n", gemini.ModelName())
 	} else {
-		fmt.Println("  [1] ☁️  Google Gemini (Unavailable: GEMINI_API_KEY not set)")
+		fmt.Println("  [1] Google Gemini (Unavailable: GEMINI_API_KEY not set)")
 	}
-	fmt.Printf("  [2] 🏠 Local LM Studio (%s @ %s)\n", lm.ModelName(), lm.baseURL)
+	fmt.Printf("  [2] Local LM Studio (%s @ %s)\n", lm.ModelName(), lm.baseURL)
 	fmt.Print("\nEnter choice [1 or 2, or press Enter to toggle]: ")
 
 	if !scanner.Scan() {
@@ -120,7 +120,7 @@ func toggleOrSelectBackend(scanner *bufio.Scanner, current AIBackend, gemini *Ge
 	switch ans {
 	case "1":
 		if gemini == nil {
-			fmt.Println("⚠️  Gemini is unavailable: GEMINI_API_KEY is not configured.")
+			fmt.Println("Gemini is unavailable: GEMINI_API_KEY is not configured.")
 			return current
 		}
 		target = gemini
@@ -132,7 +132,7 @@ func toggleOrSelectBackend(scanner *bufio.Scanner, current AIBackend, gemini *Ge
 			target = lm
 		} else {
 			if gemini == nil {
-				fmt.Println("⚠️  Cannot switch to Gemini: GEMINI_API_KEY is not configured.")
+				fmt.Println("Cannot switch to Gemini: GEMINI_API_KEY is not configured.")
 				return current
 			}
 			target = gemini
@@ -145,18 +145,18 @@ func toggleOrSelectBackend(scanner *bufio.Scanner, current AIBackend, gemini *Ge
 	if target.Type() == BackendLMStudio {
 		fmt.Printf("Pinging LM Studio at %s...\n", lm.baseURL)
 		if err := lm.Ping(context.Background()); err != nil {
-			fmt.Printf("⚠️  LM Studio check failed: %v\n", err)
+			fmt.Printf("LM Studio check failed: %v\n", err)
 			fmt.Println("Make sure LM Studio has started a local server on port 1234.")
 			fmt.Print("Switch anyway? (y/N): ")
 			if scanner.Scan() && strings.EqualFold(strings.TrimSpace(scanner.Text()), "y") {
-				fmt.Printf("✅ Switched to: %s\n", target.DisplayName())
+				fmt.Printf("Switched to: %s\n", target.DisplayName())
 				return target
 			}
 			return current
 		}
 	}
 
-	fmt.Printf("✅ Switched AI backend to: %s\n", target.DisplayName())
+	fmt.Printf("Switched AI backend to: %s\n", target.DisplayName())
 	return target
 }
 
@@ -168,11 +168,11 @@ func selectOrMakePersonality(scanner *bufio.Scanner, list []*Personality, curren
 		for i, p := range list {
 			hasMem := ""
 			if strings.TrimSpace(p.Memory) != "" {
-				hasMem = " [🧠 Has memories]"
+				hasMem = " [Has memories]"
 			}
 			voiceNote := ""
 			if p.VoiceID != "" {
-				voiceNote = fmt.Sprintf(" [🎙️ %s]", p.VoiceID[:min(8, len(p.VoiceID))])
+				voiceNote = fmt.Sprintf(" [Voice: %s]", p.VoiceID[:min(8, len(p.VoiceID))])
 			}
 			fmt.Printf(" [%d] %s (%s)%s%s\n", i+1, p.Name, p.Tagline, voiceNote, hasMem)
 		}
@@ -252,7 +252,8 @@ func min(a, b int) int {
 
 func main() {
 	headless := flag.Bool("headless", false, "only run the plant server (sensor bridge + HTTP API), without the chat")
-	// -local/-lmstudio/-gemini are read from os.Args below; declared here so flag.Parse() doesn't reject them
+	voiceFlag := flag.Bool("voice", false, "start in voice conversation mode using microphone and STT")
+	flag.Bool("stt", false, "same as -voice")
 	flag.Bool("local", false, "start on the local LM Studio backend")
 	flag.Bool("lmstudio", false, "same as -local")
 	flag.Bool("gemini", false, "start on the Gemini backend")
@@ -262,10 +263,14 @@ func main() {
 		log.Fatal(<-serverErr) // the server only stops on failure; systemd restarts it
 	}
 
-	// Check for command line flags: e.g. -local or --local
+	forceVoice := *voiceFlag
 	forceLocal := false
 	forceGemini := false
 	for _, arg := range os.Args[1:] {
+		if strings.EqualFold(arg, "-voice") || strings.EqualFold(arg, "--voice") ||
+			strings.EqualFold(arg, "-stt") || strings.EqualFold(arg, "--stt") {
+			forceVoice = true
+		}
 		if strings.EqualFold(arg, "-local") || strings.EqualFold(arg, "--local") ||
 			strings.EqualFold(arg, "-lmstudio") || strings.EqualFold(arg, "--lmstudio") {
 			forceLocal = true
@@ -305,7 +310,7 @@ func main() {
 	if geminiKey != "" {
 		gb, err := NewGeminiBackend(geminiKey, modelName)
 		if err != nil {
-			fmt.Printf("⚠️  Gemini client initialization warning: %v\n", err)
+			fmt.Printf("Gemini client initialization warning: %v\n", err)
 		} else {
 			geminiBackend = gb
 		}
@@ -327,7 +332,7 @@ func main() {
 		if geminiBackend != nil {
 			activeBackend = geminiBackend
 		} else {
-			fmt.Println("⚠️  Gemini provider requested, but GEMINI_API_KEY is missing. Falling back to local LM Studio.")
+			fmt.Println("Gemini provider requested, but GEMINI_API_KEY is missing. Falling back to local LM Studio.")
 			activeBackend = lmStudioBackend
 		}
 	} else {
@@ -347,27 +352,36 @@ func main() {
 			fmt.Printf("2. To use Local LM Studio: Start LM Studio local server on %s (error: %v).\n", lmStudioURL, err)
 			os.Exit(1)
 		}
-		fmt.Printf("ℹ️  Running in Local AI mode (LM Studio @ %s)\n", lmStudioURL)
+		fmt.Printf("Running in Local AI mode (LM Studio @ %s)\n", lmStudioURL)
 	}
 
 	elevenLabsKey := getElevenLabsKey()
 	var ttsManager *TTSManager
 	ttsEnabled := false
+	var sttManager *STTManager
 
 	if elevenLabsKey != "" {
 		tm, err := NewTTSManager(elevenLabsKey)
 		if err != nil {
-			fmt.Printf("⚠️  ElevenLabs initialization warning: %v\n", err)
+			fmt.Printf("ElevenLabs TTS warning: %v\n", err)
 		} else {
 			ttsManager = tm
 			ttsEnabled = true
-			fmt.Println("🎙️  ElevenLabs Voice Audio: Enabled")
+			fmt.Println("ElevenLabs Voice Audio: Enabled")
+		}
+
+		sm, err := NewSTTManager(elevenLabsKey)
+		if err != nil {
+			fmt.Printf("ElevenLabs STT warning: %v\n", err)
+		} else {
+			sttManager = sm
+			fmt.Println("ElevenLabs Speech to Text: Ready")
 		}
 	} else {
-		fmt.Println("🎙️  ElevenLabs Voice Audio: Disabled (no ELEVENLABS_API_KEY found)")
+		fmt.Println("ElevenLabs Audio: Disabled (no ELEVENLABS_API_KEY found)")
 	}
 
-	fmt.Printf("🤖 Active AI Backend: %s\n", activeBackend.DisplayName())
+	fmt.Printf("Active AI Backend: %s\n", activeBackend.DisplayName())
 
 	ctx := context.Background()
 
@@ -387,40 +401,74 @@ func main() {
 		}
 		personalities = updatedList
 
-		voiceStatus := "🔇 Disabled (no ELEVENLABS_API_KEY)"
+		voiceMode := forceVoice
+		voiceStatus := "Disabled (no ELEVENLABS_API_KEY)"
 		if ttsManager != nil {
 			if ttsEnabled {
-				voiceStatus = fmt.Sprintf("🔊 Enabled (%s)", ResolveVoiceID(persona)[:min(8, len(ResolveVoiceID(persona)))])
+				voiceStatus = fmt.Sprintf("Enabled (%s)", ResolveVoiceID(persona)[:min(8, len(ResolveVoiceID(persona)))])
 			} else {
-				voiceStatus = "🔇 Muted"
+				voiceStatus = "Muted"
 			}
 		}
 
-		fmt.Printf("\n--- Now chatting with %s ---\n", persona.Name)
-		fmt.Printf("AI Backend:  %s\n", activeBackend.DisplayName())
-		fmt.Printf("Audio Voice: %s\n", voiceStatus)
+		sttStatus := "Disabled (no ELEVENLABS_API_KEY)"
+		if sttManager != nil {
+			if voiceMode {
+				sttStatus = "Active (listening to microphone)"
+			} else {
+				sttStatus = "Ready (type /voice to activate)"
+			}
+		}
+
+		fmt.Printf("\nNow chatting with %s\n", persona.Name)
+		fmt.Printf("AI Backend:   %s\n", activeBackend.DisplayName())
+		fmt.Printf("Audio Voice:  %s\n", voiceStatus)
+		fmt.Printf("Speech Input: %s\n", sttStatus)
 		fmt.Println("Commands:")
-		fmt.Println("  /memory       - View current memories for this persona")
-		fmt.Println("  /clear-memory - Erase memory for this persona")
-		fmt.Println("  /model        - Switch AI model/backend (Gemini <-> Local LM Studio)")
-		fmt.Println("  /test-voice   - Play a test audio phrase in this persona's voice")
-		fmt.Println("  /toggle-voice - Toggle audio voice output on/off")
-		fmt.Println("  /switch       - Save memory and switch to another personality")
-		fmt.Println("  exit or quit  - Save memory and exit program")
-		fmt.Println("----------------------------------------\n")
+		fmt.Println("  /voice        Toggle speech to text microphone mode")
+		fmt.Println("  /model        Switch AI backend (Gemini or Local LM Studio)")
+		fmt.Println("  /toggle-voice Toggle audio speaker voice output on or off")
+		fmt.Println("  /test-voice   Play a test audio phrase in this persona voice")
+		fmt.Println("  /memory       View current memories for this persona")
+		fmt.Println("  /clear-memory Erase memory for this persona")
+		fmt.Println("  /switch       Save memory and switch to another personality")
+		fmt.Println("  exit or quit  Save memory and exit program")
+		fmt.Println("----------------------------------------")
+		fmt.Println()
 
 		var sessionTurns []string
 		var history []ChatMessage
 		exiting := false
 
 		for {
-			fmt.Printf("You: ")
-			if !scanner.Scan() {
-				exiting = true
-				break
+			var input string
+
+			if voiceMode && sttManager != nil {
+				spoken, err := RecordSpeechTurn(ctx, sttManager)
+				if err != nil {
+					fmt.Println()
+					fmt.Printf("Speech recognition note: %v\n", err)
+					fmt.Println("Switched to keyboard text mode. Type your message below:")
+					fmt.Println()
+					voiceMode = false
+					fmt.Printf("You: ")
+					if !scanner.Scan() {
+						exiting = true
+						break
+					}
+					input = strings.TrimSpace(scanner.Text())
+				} else {
+					input = spoken
+				}
+			} else {
+				fmt.Printf("You: ")
+				if !scanner.Scan() {
+					exiting = true
+					break
+				}
+				input = strings.TrimSpace(scanner.Text())
 			}
 
-			input := strings.TrimSpace(scanner.Text())
 			if input == "" {
 				continue
 			}
@@ -431,12 +479,29 @@ func main() {
 				break
 			}
 
+			if strings.EqualFold(input, "/voice") || strings.EqualFold(input, "/mic") || strings.EqualFold(input, "/talk") {
+				if sttManager == nil {
+					fmt.Println("ElevenLabs key not found. Add ELEVENLABS_API_KEY to your .env to enable speech to text.")
+					fmt.Println()
+					continue
+				}
+				voiceMode = !voiceMode
+				if voiceMode {
+					fmt.Println("Speech to text mode enabled. Speak into your microphone.")
+					fmt.Println()
+				} else {
+					fmt.Println("Keyboard mode enabled. Type your messages.")
+					fmt.Println()
+				}
+				continue
+			}
+
 			if strings.EqualFold(input, "/switch") {
 				break
 			}
 
 			if strings.EqualFold(input, "/memory") {
-				fmt.Printf("\n[🧠 Stored Memory for %s]:\n", persona.Name)
+				fmt.Printf("\n[Stored Memory for %s]:\n", persona.Name)
 				if strings.TrimSpace(persona.Memory) == "" {
 					fmt.Println("  (No memories recorded yet.)")
 				} else {
@@ -456,32 +521,37 @@ func main() {
 			if strings.EqualFold(input, "/model") || strings.EqualFold(input, "/backend") {
 				if activeBackend.Type() == BackendGemini {
 					if err := lmStudioBackend.Ping(ctx); err != nil {
-						fmt.Printf("\n⚠️  [Cannot connect to LM Studio at %s: %v]\n", lmStudioBackend.baseURL, err)
-						fmt.Println("Make sure LM Studio local server is running on port 1234. Staying on Gemini.\n")
+						fmt.Printf("\n[Cannot connect to LM Studio at %s: %v]\n", lmStudioBackend.baseURL, err)
+						fmt.Println("Make sure LM Studio local server is running on port 1234. Staying on Gemini.")
+						fmt.Println()
 						continue
 					}
 					activeBackend = lmStudioBackend
-					fmt.Printf("\n🔄 [Switched AI backend to: %s]\n\n", activeBackend.DisplayName())
+					fmt.Printf("\n[Switched AI backend to: %s]\n\n", activeBackend.DisplayName())
 				} else {
 					if geminiBackend == nil {
-						fmt.Println("\n⚠️  [Gemini is unavailable: GEMINI_API_KEY was not found. Staying on LM Studio]\n")
+						fmt.Println("\n[Gemini is unavailable: GEMINI_API_KEY was not found. Staying on LM Studio]")
+						fmt.Println()
 						continue
 					}
 					activeBackend = geminiBackend
-					fmt.Printf("\n🔄 [Switched AI backend to: %s]\n\n", activeBackend.DisplayName())
+					fmt.Printf("\n[Switched AI backend to: %s]\n\n", activeBackend.DisplayName())
 				}
 				continue
 			}
 
 			if strings.EqualFold(input, "/toggle-voice") {
 				if ttsManager == nil {
-					fmt.Println("\n[ElevenLabs key not found. Add ELEVENLABS_API_KEY to your .env to enable audio]\n")
+					fmt.Println("\n[ElevenLabs key not found. Add ELEVENLABS_API_KEY to your .env to enable audio]")
+					fmt.Println()
 				} else {
 					ttsEnabled = !ttsEnabled
 					if ttsEnabled {
-						fmt.Println("\n[🔊 Voice output turned ON]\n")
+						fmt.Println("\n[Voice output turned ON]")
+						fmt.Println()
 					} else {
-						fmt.Println("\n[🔇 Voice output turned OFF]\n")
+						fmt.Println("\n[Voice output turned OFF]")
+						fmt.Println()
 					}
 				}
 				continue
@@ -489,14 +559,16 @@ func main() {
 
 			if strings.EqualFold(input, "/test-voice") {
 				if ttsManager == nil {
-					fmt.Println("\n[ElevenLabs key not found. Add ELEVENLABS_API_KEY to your .env to enable audio]\n")
+					fmt.Println("\n[ElevenLabs key not found. Add ELEVENLABS_API_KEY to your .env to enable audio]")
+					fmt.Println()
 				} else {
 					testPhrase := fmt.Sprintf("Hello! I am %s. %s", persona.Name, persona.Tagline)
-					fmt.Printf("\n[🔊 Playing sample voice for %s...]\n", persona.Name)
+					fmt.Printf("\n[Playing sample voice for %s...]\n", persona.Name)
 					if err := ttsManager.Speak(ctx, persona, testPhrase); err != nil {
 						fmt.Printf("[Voice test error: %v]\n\n", err)
 					} else {
-						fmt.Println("[Audio playback finished]\n")
+						fmt.Println("[Audio playback finished]")
+						fmt.Println()
 					}
 				}
 				continue
@@ -521,9 +593,9 @@ func main() {
 
 			// Play speech if TTS is active
 			if ttsManager != nil && ttsEnabled && replyStr != "" {
-				fmt.Printf("🔊 [Playing %s's voice...]\n", persona.Name)
+				fmt.Printf("[Playing %s's voice...]\n", persona.Name)
 				if err := ttsManager.Speak(ctx, persona, replyStr); err != nil {
-					fmt.Printf("⚠️  [Audio playback error: %v]\n", err)
+					fmt.Printf("[Audio playback error: %v]\n", err)
 				}
 			}
 			fmt.Println()
