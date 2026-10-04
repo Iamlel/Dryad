@@ -1,4 +1,5 @@
-"""Dryad: Flask gateway to the team's Plant API."""
+"""Dryad's website: serves the page and passes its /api requests through to the
+Go server (BACKEND_URL), so phones only ever talk to this site."""
 import io
 import os
 import re
@@ -44,6 +45,7 @@ def upstream(path, recording=None, content_type=None, payload=None):
 
 @app.after_request
 def headers(response):
+    # Only images (QR labels) are cached. Camera and mic are for this site only.
     if not response.mimetype.startswith('image/'):
         response.headers['Cache-Control'] = 'no-store'
     response.headers['X-Content-Type-Options'] = 'nosniff'
@@ -173,6 +175,7 @@ def health():
 
 @app.get('/qr/<plant_id>.png')
 def qr(plant_id):
+    # A printable label; scanning it on the page opens this plant.
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', plant_id):
         return jsonify(error='Invalid plant ID'), 400
     buffer = io.BytesIO()

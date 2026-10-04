@@ -1,3 +1,6 @@
+// test_stt checks that an ElevenLabs key can do speech to text. From server/:
+//
+//	go run ./cmd/test_stt
 package main
 
 import (
@@ -11,6 +14,7 @@ import (
 	"time"
 )
 
+// loadKey reads a key from a .env file here or up to two folders up.
 func loadKey(filename string, targetKeys ...string) string {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -59,7 +63,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// Check speech to text permissions
+	// Only keys with speech_to_text get a realtime token, so asking is the check.
 	tokenURL := "https://api.elevenlabs.io/v1/single-use-token/realtime_scribe"
 	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, nil)
 	if err != nil {

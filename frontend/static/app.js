@@ -1,3 +1,5 @@
+// The Dryad page: the selected plant's live readings and journal, QR scanning,
+// talking to the plant, and the caretaker wallet.
 'use strict';
 const $ = id => document.getElementById(id);
 const POLL_MS = 1500;
@@ -50,6 +52,7 @@ function selectPlant(id) {
   selected=id;reset();showPlant();renderRoster();drawCharts();
   history.replaceState(null,'','?plant='+encodeURIComponent(id));poll();
 }
+// API answers are checked before they're shown, so a bad one becomes an error message.
 function validateState(s) {
   if (!s || typeof s!=='object' || !Object.hasOwn(statuses,s.status) || typeof s.stale!=='boolean' || typeof s.dialog!=='string') throw Error('Unexpected plant API response.');
   for(const key of ['moisture_pct','light_pct','temperature_c']) {
@@ -58,6 +61,7 @@ function validateState(s) {
   for(const key of ['moisture_pct','light_pct'])if(number(s[key])&&(s[key]<0||s[key]>100))throw Error('Sensor percentage is outside 0–100.');
   if(s.updated_at!==null&&!Number.isFinite(Date.parse(s.updated_at)))throw Error('Invalid sensor timestamp.');
 }
+// The body classes set here (night, dry, wet, hot, cold, stale) restyle the page.
 function renderState(s) {
   validateState(s);
   const p=plant(), stamp=Date.parse(s.updated_at), age=Date.now()-stamp;
@@ -89,6 +93,7 @@ function renderState(s) {
   }
   drawCharts();
 }
+// The journal: this tab's last 100 fresh reports for the plant, as SVG charts.
 function drawCharts() {
   const list=journals.get(selected)||[];const ns='http://www.w3.org/2000/svg';$('charts').replaceChildren();
   for(const [key,label,color] of [['moisture_pct','Soil moisture · %','#79a69c'],['light_pct','Light · %','#cfad58'],['temperature_c','Temperature · °C','#c68c72']]) {
@@ -109,6 +114,8 @@ function drawCharts() {
   }
   text('history-status',list.length?`${list.length} samples this session · ${new Date(list[0].updated_at).toLocaleTimeString()} – ${new Date(list.at(-1).updated_at).toLocaleTimeString()}`:'No fresh samples yet. History starts when measurements arrive.');
 }
+// Refreshes the plant list every 30 s and the plant every 1.5 s. generation drops
+// answers to older requests.
 async function poll() {
   clearTimeout(timer);controller?.abort();controller=new AbortController();const signal=controller.signal,g=++generation;
   const timeout=setTimeout(()=>controller?.signal===signal&&controller.abort(),8000);
@@ -132,10 +139,14 @@ async function poll() {
   finally{clearTimeout(timeout);if(g===generation)timer=setTimeout(poll,POLL_MS);}
 }
 $('refresh').onclick=()=>{listUpdated=0;poll();pollCaretaker();};
+// A label holds dryad:<id> (old ones groot:<id>), a raw id, {"plant_id": ...} or
+// a URL with ?plant=<id>.
 function qrID(raw){let v=raw.trim();if(v.startsWith('dryad:')||v.startsWith('groot:'))v=v.slice(6);else if(v.startsWith('{'))v=JSON.parse(v).plant_id;else if(/^https?:/.test(v))v=new URL(v).searchParams.get('plant');if(typeof v!=='string'||!/^[A-Za-z0-9_-]{1,64}$/.test(v))throw Error('Use a plant ID, dryad:ID, or a URL containing ?plant=ID.');return v;}
 function closeCamera(){scannerGeneration++;clearTimeout(cameraTimer);cameraStream?.getTracks().forEach(t=>t.stop());cameraStream=null;$('camera').srcObject=null;}
 $('scanner').addEventListener('close',closeCamera);$('close-scan').onclick=()=>$('scanner').close();
 $('qr-form').onsubmit=e=>{e.preventDefault();try{selectPlant(qrID($('qr-input').value));$('scanner').close();}catch(err){text('scan-status',err.message);}};
+// Scans with BarcodeDetector when the browser has it, otherwise jsQR.
+// scannerGeneration stops the loop of a closed scanner.
 $('scan').onclick=async()=>{$('scanner').showModal();text('scan-status','Starting camera…');const sg=++scannerGeneration;
  try{if(!navigator.mediaDevices?.getUserMedia)throw Error('Camera requires localhost or HTTPS. You can enter the QR text below.');
   const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});if(sg!==scannerGeneration){stream.getTracks().forEach(t=>t.stop());return;}cameraStream=stream;$('camera').srcObject=stream;await $('camera').play();
@@ -145,9 +156,8 @@ $('scan').onclick=async()=>{$('scanner').showModal();text('scan-status','Startin
   async function scan(){if(sg!==scannerGeneration)return;try{let raw;if(detector){const codes=await detector.detect($('camera'));raw=codes[0]?.rawValue;}else{canvas.width=$('camera').videoWidth;canvas.height=$('camera').videoHeight;if(canvas.width){ctx.drawImage($('camera'),0,0);const im=ctx.getImageData(0,0,canvas.width,canvas.height);raw=jsQR(im.data,im.width,im.height)?.data;}}if(raw){selectPlant(qrID(raw));$('scanner').close();return;}}catch(e){text('scan-status',e.message);}if(sg===scannerGeneration)cameraTimer=setTimeout(scan,250);}scan();
  }catch(e){if(sg===scannerGeneration){closeCamera();text('scan-status',e.message);}}};
 
-// Talking to the plant: record with the mic and upload it. The board answers
-// everyone's recordings in turn; this page asks for its answer until it's
-// ready (giving up after a while), then shows it and plays the plant's voice.
+// Talking to the plant. The board answers recordings in turn; the page polls for
+// its answer (giving up after a while), then shows it and plays the voice.
 const TALK_MAX_MS=20000,ANSWER_WAIT_MS=90000;
 let recorder,talkTimer,player,waiting=false;
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
@@ -163,9 +173,8 @@ function bubble(who,words,mine){
   $('messages').append(b);while($('messages').children.length>6)$('messages').firstChild.remove();
   return b;
 }
-// Phones only play sound that a tap started, and the answer arrives seconds
-// after the tap. So the tap that sends the recording plays a moment of
-// silence on the player that will later play the answer.
+// Phones only play sound started by a tap, and the answer comes seconds later,
+// so the tap that sends the recording unlocks the player with a moment of silence.
 function unlockPlayer(){
   const n=800,wav=new DataView(new ArrayBuffer(44+n*2)),ascii=(at,s)=>[...s].forEach((c,i)=>wav.setUint8(at+i,c.charCodeAt(0)));
   ascii(0,'RIFF');wav.setUint32(4,36+n*2,true);ascii(8,'WAVEfmt ');wav.setUint32(16,16,true);wav.setUint16(20,1,true);wav.setUint16(22,1,true);
@@ -217,9 +226,8 @@ $('talk').onclick=async()=>{
   }catch(e){text('talk-status',e.name==='NotAllowedError'?'Microphone permission was denied.':e.message);}
 };
 
-// Grove keeper: save a Solana wallet as the plants' caretaker. Watering a
-// thirsty plant back into its range earns that wallet 0.01 test SOL (devnet);
-// the rewards list refreshes every 10 seconds, so a new one shows up soon after.
+// Caretaker wallet. Watering a thirsty plant back into range earns it 0.01 test
+// SOL on devnet; the rewards list refreshes every 10 seconds.
 const CARETAKER_POLL_MS=10000;
 let caretakerTimer,walletNote=null; // walletNote: the last save's result, shown until the next save
 const shortWallet=w=>w.length>12?w.slice(0,4)+'…'+w.slice(-4):w;

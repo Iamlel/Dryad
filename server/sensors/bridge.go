@@ -1,13 +1,9 @@
-package main
+package sensors
 
-// The sensor bridge: receives the MCU's sensor reports.
-//
-// On the UNO Q, the MCU sends its reports over a UART to arduino-router, a
-// Linux service that serves them on a unix socket using MessagePack-RPC.
-// We send the router one message when we connect, asking it to forward the
-// firmware's "groot.sample" reports to us. Nothing is ever sent to the MCU.
-//
-// Messages are MessagePack arrays:
+// The sensor bridge. The MCU sends its reports over UART to arduino-router, a
+// Linux service that serves them on a unix socket as MessagePack-RPC. We
+// register for "dryad.sample" when we connect and never send anything to the
+// MCU. Messages are MessagePack arrays:
 //
 //	[0, id, method, params]   request: our "$/register" call
 //	[1, id, error, result]    response: the router's answer to it
@@ -27,12 +23,12 @@ import (
 )
 
 const (
-	defaultRouterAddr = "/var/run/arduino-router.sock"
-	reportMethod      = "groot.sample" // GROOT_RPC_METHOD in firmware/groot_config.h
-	reportVersion     = 2              // GROOT_PROTOCOL_VERSION in firmware/groot_config.h
+	DefaultRouterAddr = "/var/run/arduino-router.sock"
+	reportMethod      = "dryad.sample" // DRYAD_RPC_METHOD in firmware/dryad_config.h
+	reportVersion     = 2              // DRYAD_PROTOCOL_VERSION in firmware/dryad_config.h
 )
 
-// report is the params of a groot.sample notification, in firmware order.
+// report is the params of a dryad.sample notification, in firmware order.
 type report struct {
 	_msgpack     struct{} `msgpack:",as_array"`
 	Version      int32
@@ -43,11 +39,10 @@ type report struct {
 	TemperatureC float32 // NaN when there is no reading
 }
 
-// runBridge stores every sensor report in latest. It runs forever,
-// reconnecting whenever the router goes away. addr is the router's unix
-// socket, or "tcp:host:port" (e.g. the socket forwarded to a laptop with
-// `adb forward tcp:7600 localfilesystem:/var/run/arduino-router.sock`).
-func runBridge(addr string, latest *LatestReading) {
+// RunBridge stores every report in latest and reconnects forever. addr is the
+// router's unix socket or "tcp:host:port", e.g. after
+// `adb forward tcp:7600 localfilesystem:/var/run/arduino-router.sock`.
+func RunBridge(addr string, latest *LatestReading) {
 	lastErr := ""
 	for {
 		err := receiveReports(addr, latest)

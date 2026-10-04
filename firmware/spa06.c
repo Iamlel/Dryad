@@ -1,6 +1,7 @@
+/* SPA06-003 driver: its registers and the datasheet's compensation formula.
+ * spa06.h has the interface. */
 #include "spa06.h"
 
-/* Registers */
 #define REG_PSR_B2   0x00 /* 6 bytes: pressure[23:0], temperature[23:0], MSB first */
 #define REG_PRS_CFG  0x06
 #define REG_TMP_CFG  0x07

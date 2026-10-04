@@ -1,9 +1,7 @@
 #!/bin/sh
-# Keeps Groot running on the board: the Go server (sensors + API, port 8080),
-# the Flask website (port 5000) and, when .env has a CLOUDFLARE_TUNNEL_TOKEN,
-# the Cloudflare tunnel that puts the website on your domain. Each one is
-# restarted 2 s after it exits. Started at boot from the arduino user's
-# crontab, so no sudo is needed; set up and restarted by deploy.sh.
+# Keeps the Go server (port 8080), the website (port 5000) and, when .env has a
+# CLOUDFLARE_TUNNEL_TOKEN, the tunnel running, restarting each 2 s after it
+# exits. deploy.sh starts it, and so does the arduino user's crontab at boot.
 cd "$(dirname "$0")" || exit 1
 
 # When deploy.sh starts this over adb, TMPDIR is adb's Android temp folder,
@@ -31,6 +29,6 @@ if [ -n "$token" ]; then
 fi
 
 while true; do
-    ./groot -headless
+    ./dryad -headless
     sleep 2
-done >> groot.log 2>&1
+done >> dryad.log 2>&1

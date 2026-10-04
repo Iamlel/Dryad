@@ -1,4 +1,4 @@
--- The plants the Groot server reads. Run it once against Tiger Data:
+-- The plants the Dryad server reads. Run it once against Tiger Data:
 --
 --   psql "$TIGER_DATABASE_URL" -f server/plants.sql
 --

@@ -1,4 +1,5 @@
-"""Production entrypoint: python serve.py (Windows or Linux)."""
+"""Production server (Waitress), as the board runs it. HOST and PORT come from
+the environment."""
 import os
 from waitress import serve
 from app import app

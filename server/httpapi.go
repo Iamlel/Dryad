@@ -13,8 +13,7 @@ package main
 //	GET /api/talk/jobs/{job}/voice   the answer in the plant's voice (MP3)
 //	GET /healthz          liveness and the deployed version
 //
-// Apart from the caretaker and talking, it only reads; plants are added with
-// plants.sql. Errors are JSON: {"error": "..."}.
+// Errors are JSON: {"error": "..."}.
 
 import (
 	"encoding/json"
@@ -25,37 +24,41 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"dryad/ai"
+	"dryad/plants"
+	"dryad/rewards"
+	"dryad/sensors"
 )
 
 // version is set at build time by deploy.sh.
 var version = "dev"
 
 type server struct {
-	sensors *LatestReading
-	plants  *PlantStore
-	rewards *Rewards
+	sensors *sensors.LatestReading
+	plants  *plants.PlantStore
+	rewards *rewards.Rewards
 	talker  *Talker
 }
 
-// startPlantServer starts the sensor bridge and the HTTP API in the
-// background. The returned channel receives the HTTP server's error if it
-// ever stops.
+// startPlantServer starts the sensor bridge and the HTTP API. The channel gets
+// the HTTP server's error if it stops.
 func startPlantServer() <-chan error {
-	plants, err := openPlantStore(envOr("TIGER_DATABASE_URL", loadKeyFromEnvFile(".env", "TIGER_DATABASE_URL")))
+	plants, err := plants.OpenPlantStore(envOr("TIGER_DATABASE_URL", ai.LoadKeyFromEnvFile(".env", "TIGER_DATABASE_URL")))
 	if err != nil {
 		log.Fatalf("plants: bad TIGER_DATABASE_URL: %v", err)
 	}
-	rewards, err := newRewards(envOr("SOLANA_TREASURY_KEY", loadKeyFromEnvFile(".env", "SOLANA_TREASURY_KEY")))
+	rewards, err := rewards.NewRewards(envOr("SOLANA_TREASURY_KEY", ai.LoadKeyFromEnvFile(".env", "SOLANA_TREASURY_KEY")))
 	if err != nil {
 		log.Fatalf("rewards: bad SOLANA_TREASURY_KEY: %v", err)
 	}
-	sensors := new(LatestReading)
-	s := &server{sensors: sensors, plants: plants, rewards: rewards, talker: newTalker(sensors)}
-	go runBridge(envOr("GROOT_ROUTER", defaultRouterAddr), s.sensors)
-	go rewards.watch(s.sensors)
+	latest := new(sensors.LatestReading)
+	s := &server{sensors: latest, plants: plants, rewards: rewards, talker: newTalker(latest)}
+	go sensors.RunBridge(envOr("DRYAD_ROUTER", sensors.DefaultRouterAddr), s.sensors)
+	go rewards.Watch(s.sensors)
 
 	httpServer := &http.Server{
-		Addr:              envOr("GROOT_HTTP_ADDR", ":8080"),
+		Addr:              envOr("DRYAD_HTTP_ADDR", ":8080"),
 		Handler:           allowCORS(s.routes()),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -86,8 +89,6 @@ func (s *server) routes() *http.ServeMux {
 	return mux
 }
 
-// ---- Plants ----------------------------------------------------------------
-
 // plantState is what GET /api/plant/{id} returns. The UI reads these names.
 type plantState struct {
 	MoisturePct  *float64   `json:"moisture_pct"`
@@ -99,8 +100,9 @@ type plantState struct {
 	UpdatedAt    *time.Time `json:"updated_at"`
 }
 
+// getPlantState judges the latest reading against the plant's ranges.
 func (s *server) getPlantState(w http.ResponseWriter, r *http.Request) {
-	p := defaultPlant
+	p := plants.DefaultPlant
 	if id := r.PathValue("id"); id != "" {
 		var err error
 		if p, err = s.plants.Get(r.Context(), strings.ToLower(id)); err != nil {
@@ -111,7 +113,7 @@ func (s *server) getPlantState(w http.ResponseWriter, r *http.Request) {
 
 	reading, ok := s.sensors.Get()
 	state := plantState{Status: p.Status(reading, ok)}
-	state.Dialog = dialog(p, state.Status)
+	state.Dialog = plants.Dialog(p, state.Status)
 	if ok {
 		state.MoisturePct, state.TemperatureC, state.LightPct = reading.MoisturePct, reading.TemperatureC, reading.LightPct
 		state.Stale, state.UpdatedAt = reading.Stale(), &reading.ReceivedAt
@@ -128,22 +130,21 @@ func (s *server) listPlants(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, plants)
 }
 
+// writePlantError picks the status code for a plants error.
 func writePlantError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, errPlantNotFound):
+	case errors.Is(err, plants.ErrPlantNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, errNoDatabase), errors.Is(err, errNoTable):
+	case errors.Is(err, plants.ErrNoDatabase), errors.Is(err, plants.ErrNoTable):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
-	case errors.Is(err, errDBUnavailable):
+	case errors.Is(err, plants.ErrDBUnavailable):
 		log.Printf("plants: %v", err)
-		writeError(w, http.StatusServiceUnavailable, errDBUnavailable.Error())
+		writeError(w, http.StatusServiceUnavailable, plants.ErrDBUnavailable.Error())
 	default:
 		log.Printf("plants: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 	}
 }
-
-// ---- Sensors ---------------------------------------------------------------
 
 func (s *server) getSensors(w http.ResponseWriter, r *http.Request) {
 	reading, ok := s.sensors.Get()
@@ -152,16 +153,14 @@ func (s *server) getSensors(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {
-		Reading
+		sensors.Reading
 		Stale bool `json:"stale"`
 	}{reading, reading.Stale()})
 }
 
-// ---- Caretaker rewards -----------------------------------------------------
-
 func (s *server) getCaretaker(w http.ResponseWriter, r *http.Request) {
 	if !s.rewards.On() {
-		writeError(w, http.StatusServiceUnavailable, errRewardsOff.Error())
+		writeError(w, http.StatusServiceUnavailable, rewards.ErrRewardsOff.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, s.rewards.State())
@@ -171,7 +170,7 @@ func (s *server) getCaretaker(w http.ResponseWriter, r *http.Request) {
 // Without a plant_id, the watering is judged by the default thresholds.
 func (s *server) setCaretaker(w http.ResponseWriter, r *http.Request) {
 	if !s.rewards.On() {
-		writeError(w, http.StatusServiceUnavailable, errRewardsOff.Error())
+		writeError(w, http.StatusServiceUnavailable, rewards.ErrRewardsOff.Error())
 		return
 	}
 	var req struct {
@@ -182,7 +181,7 @@ func (s *server) setCaretaker(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, `send JSON: {"wallet": "<Solana address>", "plant_id": "fern"}`)
 		return
 	}
-	p := defaultPlant
+	p := plants.DefaultPlant
 	if req.PlantID != "" {
 		var err error
 		if p, err = s.plants.Get(r.Context(), strings.ToLower(req.PlantID)); err != nil {
@@ -196,8 +195,6 @@ func (s *server) setCaretaker(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, s.rewards.State())
 }
-
-// ---- Talking to a plant ----------------------------------------------------
 
 // talk queues a voice recording (the body, as the browser recorded it) and
 // answers 202 {"job": "..."}; the page then asks talkJob for the answer.
@@ -242,7 +239,6 @@ func (s *server) talkJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, state)
 }
 
-// talkVoice is the answer in the plant's voice, once the job is done.
 func (s *server) talkVoice(w http.ResponseWriter, r *http.Request) {
 	_, voice, ok := s.talker.Job(r.PathValue("job"))
 	if !ok || voice == nil {
@@ -252,8 +248,6 @@ func (s *server) talkVoice(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "audio/mpeg")
 	w.Write(voice)
 }
-
-// ---- Helpers ---------------------------------------------------------------
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -265,8 +259,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// allowCORS lets a page served from elsewhere (e.g. the Flask UI) call the
-// API from the browser.
+// allowCORS lets pages from other origins call the API.
 func allowCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -279,6 +272,7 @@ func allowCORS(next http.Handler) http.Handler {
 	})
 }
 
+// envOr is the environment variable, or fallback when it's unset.
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

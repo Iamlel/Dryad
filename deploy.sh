@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build Groot on this machine and run it on the Arduino UNO Q (via adb): the
+# Build Dryad on this machine and run it on the Arduino UNO Q (via adb): the
 # Go server (sensors + API, port 8080), the Flask website (port 5000) and,
 # once server/.env has a CLOUDFLARE_TUNNEL_TOKEN, the Cloudflare tunnel that
 # puts the website on your domain.
@@ -16,12 +16,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-REMOTE_DIR=/home/arduino/groot
+REMOTE_DIR=/home/arduino/dryad
 FQBN=arduino:zephyr:unoq
 LOOP=$REMOTE_DIR/keep-running.sh
 # How keep-running.sh runs each process. Anchored, so pgrep and pkill never
 # match their own command line.
-SERVER_CMD='^./groot -headless'
+SERVER_CMD='^./dryad -headless'
 WEB_CMD='^python3 frontend/serve.py'
 TUNNEL_CMD='^./cloudflared tunnel'
 
@@ -29,7 +29,7 @@ deploy() {
     echo "==> building the server (linux/arm64)"
     mkdir -p build
     (cd server && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-        go build -trimpath -ldflags="-s -w -X main.version=$(git describe --always --dirty)" -o ../build/groot .)
+        go build -trimpath -ldflags="-s -w -X main.version=$(git describe --always --dirty)" -o ../build/dryad .)
 
     # The board's Python (3.13) has no pip, so the website's packages are
     # installed here, built for the board, and pushed. Redone only when
@@ -77,7 +77,7 @@ deploy() {
 
     echo "==> pushing to $REMOTE_DIR"
     adb shell "mkdir -p $REMOTE_DIR/frontend"
-    adb push -q build/groot "$REMOTE_DIR/groot.new"
+    adb push -q build/dryad "$REMOTE_DIR/dryad.new"
     adb push -q deploy/keep-running.sh "$LOOP.new"
     if [[ -n "$new_packages" ]]; then
         adb shell "rm -rf $REMOTE_DIR/pydeps"
@@ -101,8 +101,8 @@ deploy() {
         adb shell "chmod 600 $REMOTE_DIR/.env"
     fi
     # Rename over the running files (safe on Linux); restart() runs the new ones.
-    adb shell "chmod +x $REMOTE_DIR/groot.new $LOOP.new &&
-        mv $REMOTE_DIR/groot.new $REMOTE_DIR/groot && mv $LOOP.new $LOOP"
+    adb shell "chmod +x $REMOTE_DIR/dryad.new $LOOP.new &&
+        mv $REMOTE_DIR/dryad.new $REMOTE_DIR/dryad && mv $LOOP.new $LOOP"
 
     restart
 }
@@ -130,10 +130,9 @@ fetch_npm() {
     done
 }
 
-# restart: start keep-running.sh afresh, which starts everything from the
-# files just pushed, and run it at every boot from the arduino user's crontab
-# (no sudo needed). cloudflared is killed outright: on a normal stop it waits
-# up to 30 s for open requests, keeping the port the new one needs.
+# restart: start keep-running.sh afresh and add it to the arduino user's crontab
+# for boot (no sudo needed). cloudflared is killed outright because a normal stop
+# waits up to 30 s for open requests.
 restart() {
     local old_server old_web
     old_server=$(pid "$SERVER_CMD")
@@ -154,7 +153,6 @@ restart() {
     fi
 }
 
-# wait_tunnel: wait until cloudflared has a live connection to Cloudflare.
 wait_tunnel() {
     echo "==> waiting for the tunnel to connect"
     for _ in $(seq 40); do
@@ -177,6 +175,7 @@ stop() {
     echo "==> stopped; './deploy.sh' starts it again"
 }
 
+# pid <pattern>: the matching process ids on the board (adb ends lines with \r).
 pid() { adb shell "pgrep -f '$1' || true" | tr -d '\r'; }
 
 # wait_healthy <name> <command> <old pid> <port>: wait until a new process
@@ -206,7 +205,6 @@ firmware() {
     arduino-cli upload -b "$FQBN" -p "$port" firmware
 }
 
-# watch: print the server's latest sensor reading once a second.
 watch() {
     if ! adb shell "curl -fsS -m 2 localhost:8080/healthz" >/dev/null 2>&1; then
         echo "The server isn't running on the board, so there's nothing to watch." >&2
@@ -237,7 +235,7 @@ case "${1:-deploy}" in
     firmware) firmware ;;
     all)      firmware; deploy ;;
     stop)     stop ;;
-    logs)     exec adb shell -t "cd $REMOTE_DIR && tail -n 50 -F groot.log web.log tunnel.log 2>/dev/null" ;;
+    logs)     exec adb shell -t "cd $REMOTE_DIR && tail -n 50 -F dryad.log web.log tunnel.log 2>/dev/null" ;;
     watch)    watch ;;
     *) sed -n '2,15p' "$0"; exit 1 ;;
 esac

@@ -1,9 +1,6 @@
-package main
-
-// Plant profiles: each plant has its own healthy ranges, stored in the
-// "plants" table of a Tiger Data (Postgres) database, and a status judged
-// from the latest sensor reading. The server only reads plants; they're
-// added with plants.sql.
+// Package plants reads the plants' healthy ranges from Tiger Data (Postgres)
+// and judges each plant's status. plants.sql adds the plants.
+package plants
 
 import (
 	"context"
@@ -15,10 +12,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"dryad/sensors"
 )
 
 // Plant is one plant profile. The fields are in the same order as the
-// table's columns.
+// table's columns, because rows are read into it by position.
 type Plant struct {
 	ID             string    `json:"id"`
 	Name           string    `json:"name"`
@@ -30,12 +29,12 @@ type Plant struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
-// defaultPlant has typical houseplant thresholds, used by GET /api/plant.
-var defaultPlant = Plant{MoistureMinPct: 30, MoistureMaxPct: 85, TempMinC: 15, TempMaxC: 30, LightMinPct: 20}
+// DefaultPlant has typical houseplant thresholds, used by GET /api/plant.
+var DefaultPlant = Plant{MoistureMinPct: 30, MoistureMaxPct: 85, TempMinC: 15, TempMaxC: 30, LightMinPct: 20}
 
 // Status is the plant's most urgent need: water first, then temperature,
 // then light. ok is false when there is no reading at all.
-func (p Plant) Status(r Reading, ok bool) string {
+func (p Plant) Status(r sensors.Reading, ok bool) string {
 	switch {
 	case !ok || r.Stale():
 		return "offline"
@@ -57,9 +56,8 @@ func (p Plant) Status(r Reading, ok bool) string {
 func below(v *float64, limit float64) bool { return v != nil && *v < limit }
 func above(v *float64, limit float64) bool { return v != nil && *v > limit }
 
-// dialog is what the plant says about its status. Placeholder lines until
-// the ElevenLabs dialog replaces this function.
-func dialog(p Plant, status string) string {
+// Dialog is the line the plant says about its status on the website.
+func Dialog(p Plant, status string) string {
 	return map[string]string{
 		"offline":     "I can't feel my roots right now... is my sensor board still plugged in?",
 		"thirsty":     "I'm so thirsty! My soil is too dry. Could you give me some water, please?",
@@ -71,26 +69,22 @@ func dialog(p Plant, status string) string {
 	}[status]
 }
 
-// ---- Tiger Data ------------------------------------------------------------
-
 var (
-	errPlantNotFound = errors.New("plant not found")
-	errNoDatabase    = errors.New("no plant database: set TIGER_DATABASE_URL in server/.env")
-	errNoTable       = errors.New("the plants table doesn't exist yet: run server/plants.sql on the database")
-	errDBUnavailable = errors.New("the plant database is unavailable, try again shortly")
+	ErrPlantNotFound = errors.New("plant not found")
+	ErrNoDatabase    = errors.New("no plant database: set TIGER_DATABASE_URL in server/.env")
+	ErrNoTable       = errors.New("the plants table doesn't exist yet: run server/plants.sql on the database")
+	ErrDBUnavailable = errors.New("the plant database is unavailable, try again shortly")
 )
 
 const plantColumns = `id, name, moisture_min_pct, moisture_max_pct, temp_min_c, temp_max_c, light_min_pct, created_at`
 
-// PlantStore reads plant profiles from Tiger Data.
 type PlantStore struct {
 	db *pgxpool.Pool // nil when TIGER_DATABASE_URL isn't set
 }
 
-// openPlantStore prepares the database at url. It connects on first use,
-// so the server starts (and serves sensor readings) even while the
-// database is unreachable.
-func openPlantStore(url string) (*PlantStore, error) {
+// OpenPlantStore connects on first use, so the server still starts (and serves
+// readings) while the database is down.
+func OpenPlantStore(url string) (*PlantStore, error) {
 	if url == "" {
 		log.Print("plants: TIGER_DATABASE_URL isn't set, so the plant endpoints are off")
 		return &PlantStore{}, nil
@@ -108,10 +102,9 @@ func openPlantStore(url string) (*PlantStore, error) {
 	return &PlantStore{db: db}, nil
 }
 
-// List returns every plant, oldest first.
 func (s *PlantStore) List(ctx context.Context) ([]Plant, error) {
 	if s.db == nil {
-		return nil, errNoDatabase
+		return nil, ErrNoDatabase
 	}
 	rows, _ := s.db.Query(ctx, `SELECT `+plantColumns+` FROM plants ORDER BY created_at, id`)
 	plants, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Plant])
@@ -120,7 +113,7 @@ func (s *PlantStore) List(ctx context.Context) ([]Plant, error) {
 
 func (s *PlantStore) Get(ctx context.Context, id string) (Plant, error) {
 	if s.db == nil {
-		return Plant{}, errNoDatabase
+		return Plant{}, ErrNoDatabase
 	}
 	rows, _ := s.db.Query(ctx, `SELECT `+plantColumns+` FROM plants WHERE id = $1`, id)
 	p, err := pgx.CollectOneRow(rows, pgx.RowToStructByPos[Plant])
@@ -135,12 +128,12 @@ func dbError(err error) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, pgx.ErrNoRows):
-		return errPlantNotFound
+		return ErrPlantNotFound
 	case errors.As(err, &pgErr) && pgErr.Code == "42P01": // undefined_table
-		return errNoTable
+		return ErrNoTable
 	case errors.As(err, &pgErr):
 		return err // a genuine SQL problem
 	default: // the database didn't answer
-		return fmt.Errorf("%w (%v)", errDBUnavailable, err)
+		return fmt.Errorf("%w (%v)", ErrDBUnavailable, err)
 	}
 }

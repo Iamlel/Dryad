@@ -1,4 +1,7 @@
-package main
+package ai
+
+// Realtime speech to text for the terminal chat's voice mode. The website's
+// recordings are transcribed in talk.go instead.
 
 import (
 	"context"
@@ -14,12 +17,10 @@ import (
 	"github.com/plexusone/elevenlabs-go/realtime"
 )
 
-// STTManager handles live speech to text transcription sessions using ElevenLabs.
 type STTManager struct {
-	client *elevenlabs.Client
+	Client *elevenlabs.Client
 }
 
-// NewSTTManager initializes the ElevenLabs realtime speech to text manager.
 func NewSTTManager(apiKey string) (*STTManager, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("no ElevenLabs API key provided")
@@ -32,10 +33,11 @@ func NewSTTManager(apiKey string) (*STTManager, error) {
 		return nil, err
 	}
 
-	return &STTManager{client: client}, nil
+	return &STTManager{Client: client}, nil
 }
 
-// StartSession connects to ElevenLabs WebSocket STT with voice activity detection.
+// StartSession opens a realtime session for 16 kHz PCM. A transcript is final
+// after silenceThresholdSecs of quiet.
 func (sm *STTManager) StartSession(ctx context.Context, silenceThresholdSecs float64) (*realtime.STTConnection, error) {
 	if silenceThresholdSecs <= 0 {
 		silenceThresholdSecs = 1.5
@@ -49,10 +51,10 @@ func (sm *STTManager) StartSession(ctx context.Context, silenceThresholdSecs flo
 		IncludeTimestamps:       false,
 	}
 
-	return sm.client.Realtime().ConnectSTT(ctx, opts)
+	return sm.Client.Realtime().ConnectSTT(ctx, opts)
 }
 
-// ProcessSpeechTurn streams audio from a channel, transcribes it, and queries the LLM.
+// ProcessSpeechTurn transcribes audio from a channel and asks the LLM. Unused.
 func ProcessSpeechTurn(
 	ctx context.Context,
 	sttManager *STTManager,
@@ -79,7 +81,6 @@ func ProcessSpeechTurn(
 		}
 	}()
 
-	// Forward incoming audio buffers to the ElevenLabs WebSocket
 	go func() {
 		for chunk := range audioStream {
 			if len(chunk) > 0 {
@@ -90,7 +91,6 @@ func ProcessSpeechTurn(
 		}
 	}()
 
-	// Wait for the final speech transcript
 	for transcript := range conn.Transcripts() {
 		if !transcript.IsFinal {
 			continue
@@ -118,7 +118,7 @@ func ProcessSpeechTurn(
 	return "", "", fmt.Errorf("speech recognition ended with no speech")
 }
 
-// RecordSpeechTurn captures microphone audio until ElevenLabs detects end of speech and returns the transcript.
+// RecordSpeechTurn records the microphone until you stop talking and returns the text.
 func RecordSpeechTurn(ctx context.Context, sttManager *STTManager) (string, error) {
 	if sttManager == nil {
 		return "", fmt.Errorf("STT manager is not initialized (check ELEVENLABS_API_KEY)")
@@ -148,7 +148,6 @@ func RecordSpeechTurn(ctx context.Context, sttManager *STTManager) (string, erro
 		}
 	}()
 
-	// Stream microphone audio to ElevenLabs
 	go func() {
 		for chunk := range audioChan {
 			if len(chunk) > 0 {
@@ -189,13 +188,14 @@ func RecordSpeechTurn(ctx context.Context, sttManager *STTManager) (string, erro
 	return "", fmt.Errorf("speech recognition ended without speech input")
 }
 
+// sttUpgrader accepts WebSocket connections from any website.
 var sttUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},
 }
 
-// SpeechTurnResult represents the response payload sent back to a WebSocket client.
+// SpeechTurnResult is one message from HandleSpeechWebSocket.
 type SpeechTurnResult struct {
 	Type        string `json:"type"`
 	UserText    string `json:"user_text,omitempty"`
@@ -204,7 +204,8 @@ type SpeechTurnResult struct {
 	Error       string `json:"error,omitempty"`
 }
 
-// HandleSpeechWebSocket streams incoming client audio to ElevenLabs STT and returns the LLM answer.
+// HandleSpeechWebSocket streams a browser's audio to ElevenLabs and sends back
+// the LLM's answer. No route uses it yet.
 func HandleSpeechWebSocket(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -234,7 +235,6 @@ func HandleSpeechWebSocket(
 	}
 	defer elevenConn.Close()
 
-	// Read audio chunks from client and pipe into ElevenLabs STT
 	go func() {
 		for {
 			messageType, data, err := clientConn.ReadMessage()
@@ -252,7 +252,6 @@ func HandleSpeechWebSocket(
 		}
 	}()
 
-	// Listen for transcription events from ElevenLabs
 	for {
 		select {
 		case <-ctx.Done():
@@ -275,7 +274,6 @@ func HandleSpeechWebSocket(
 				continue
 			}
 
-			// Send final transcript to the active LLM
 			replyText, err := backend.Chat(ctx, persona, *history, userText)
 			if err != nil {
 				_ = clientConn.WriteJSON(SpeechTurnResult{
@@ -291,7 +289,7 @@ func HandleSpeechWebSocket(
 			var audioB64 string
 			if ttsManager != nil {
 				voiceID := ResolveVoiceID(persona)
-				audioStream, err := ttsManager.client.TTS().Simple(ctx, voiceID, CleanSpokenText(persona.Name, replyText))
+				audioStream, err := ttsManager.Client.TTS().Simple(ctx, voiceID, CleanSpokenText(persona.Name, replyText))
 				if err == nil {
 					audioBytes, _ := io.ReadAll(audioStream)
 					if len(audioBytes) > 0 {

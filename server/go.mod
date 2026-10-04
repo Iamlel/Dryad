@@ -1,4 +1,4 @@
-module hello
+module dryad
 
 go 1.26.5
 

@@ -1,4 +1,6 @@
-package main
+package ai
+
+// Personalities live in personalities.json next to the server.
 
 import (
 	"context"
@@ -12,17 +14,16 @@ import (
 
 const personalitiesFile = "personalities.json"
 
-// Personality represents a persona with custom instructions, accumulated memory, and voice configuration.
 type Personality struct {
-	ID          string `json:"id"`
+	ID          string `json:"id"` // the same id as the plant in plants.sql
 	Name        string `json:"name"`
 	Tagline     string `json:"tagline"`
-	Instruction string `json:"instruction"`
-	Memory      string `json:"memory"`
-	VoiceID     string `json:"voice_id,omitempty"`
+	Instruction string `json:"instruction"`        // who the character is and how it talks
+	Memory      string `json:"memory"`             // a summary of past terminal chats, added to every prompt
+	VoiceID     string `json:"voice_id,omitempty"` // the ElevenLabs voice; empty picks a default (tts.go)
 }
 
-// GetDefaultPersonalities provides pre-built personalities to start with.
+// GetDefaultPersonalities is what LoadPersonalities writes when there's no file.
 func GetDefaultPersonalities() []*Personality {
 	return []*Personality{
 		{
@@ -67,7 +68,6 @@ func LoadPersonalities() ([]*Personality, error) {
 	return list, nil
 }
 
-// SavePersonalities saves all personalities to personalities.json.
 func SavePersonalities(list []*Personality) error {
 	data, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
@@ -76,7 +76,8 @@ func SavePersonalities(list []*Personality) error {
 	return os.WriteFile(personalitiesFile, data, 0644)
 }
 
-// BuildSystemInstruction formats the character prompt along with remembered history.
+// BuildSystemInstruction is the system prompt: the character, its memories and
+// the rules for staying in character.
 func BuildSystemInstruction(p *Personality) string {
 	var memorySection string
 	if strings.TrimSpace(p.Memory) == "" {
@@ -99,7 +100,7 @@ Rules:
 - Retain your character's unique voice, attitude, idioms, and vocabulary.`, p.Name, p.Instruction, memorySection)
 }
 
-// UpdateMemory asks Gemini to summarize the recent conversation turns and merge them into the persona's memory.
+// UpdateMemory has Gemini merge the session into the personality's memory.
 func UpdateMemory(ctx context.Context, client *genai.Client, modelName string, p *Personality, sessionTurns []string) error {
 	if len(sessionTurns) == 0 {
 		return nil

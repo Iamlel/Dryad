@@ -1,4 +1,6 @@
-package main
+package ai
+
+// Live tests against LM Studio and Gemini. Each skips when its backend isn't there.
 
 import (
 	"context"
@@ -33,7 +35,7 @@ func TestLMStudioBackend(t *testing.T) {
 }
 
 func TestGeminiBackend(t *testing.T) {
-	key := getAPIKey()
+	key := GetAPIKey()
 	if key == "" {
 		t.Skip("Gemini API key not found, skipping test")
 	}

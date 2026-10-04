@@ -1,4 +1,6 @@
-package main
+// Package sensors receives the MCU's sensor reports (bridge.go) and keeps the
+// latest one.
+package sensors
 
 import (
 	"sync"

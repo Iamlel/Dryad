@@ -1,4 +1,7 @@
-package main
+package ai
+
+// The plants' ElevenLabs voices. Speak plays them here for the terminal chat;
+// the website gets the MP3 from talk.go.
 
 import (
 	"context"
@@ -12,22 +15,19 @@ import (
 	elevenlabs "github.com/plexusone/elevenlabs-go"
 )
 
-// Default premade ElevenLabs voice IDs for standard characters
-// Uses premade voices that are fully supported on ElevenLabs free tier accounts
+// The default voices are premade ElevenLabs voices, which work on the free plan.
 const (
-	DefaultVoiceSpike = "pNInz6obpgDQGcFmaJgB" // Adam - deep, stoic, dry
-	DefaultVoiceFern  = "cgSgspJ2msm6clMCkdW9" // Jessica - playful, bright, warm
+	DefaultVoiceSpike = "pNInz6obpgDQGcFmaJgB" // Adam, deep and dry
+	DefaultVoiceFern  = "cgSgspJ2msm6clMCkdW9" // Jessica, bright and warm
 )
 
-// LegacyLibraryVoiceRachel is a community library voice that causes 402 Payment Required on free tier
+// LegacyLibraryVoiceRachel is a library voice; free accounts get 402 Payment Required.
 const LegacyLibraryVoiceRachel = "21m00Tcm4TlvDq8ikWAM"
 
-// TTSManager handles text-to-speech conversion and playback.
 type TTSManager struct {
-	client *elevenlabs.Client
+	Client *elevenlabs.Client
 }
 
-// NewTTSManager initializes the ElevenLabs client if an API key is available.
 func NewTTSManager(apiKey string) (*TTSManager, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("no ElevenLabs API key provided")
@@ -40,14 +40,13 @@ func NewTTSManager(apiKey string) (*TTSManager, error) {
 		return nil, err
 	}
 
-	return &TTSManager{client: client}, nil
+	return &TTSManager{Client: client}, nil
 }
 
-// CleanSpokenText strips markdown symbols and persona prefixes so the voice sounds natural.
+// CleanSpokenText strips markdown and a leading "Name:" so the voice sounds natural.
 func CleanSpokenText(name, text string) string {
 	cleaned := strings.TrimSpace(text)
 
-	// Remove persona name prefixes like "Fern: " or "**Fern**: "
 	prefixes := []string{
 		name + ":",
 		"**" + name + "**:",
@@ -60,17 +59,16 @@ func CleanSpokenText(name, text string) string {
 		}
 	}
 
-	// Remove markdown asterisks (e.g. bold or italic notation)
 	cleaned = strings.ReplaceAll(cleaned, "**", "")
 	cleaned = strings.ReplaceAll(cleaned, "*", "")
 	return strings.TrimSpace(cleaned)
 }
 
-// ResolveVoiceID returns the voice ID for a given personality.
+// ResolveVoiceID is the personality's voice, or Spike's or Fern's default. The
+// paid-only Rachel voice becomes Fern's.
 func ResolveVoiceID(p *Personality) string {
 	voice := strings.TrimSpace(p.VoiceID)
 
-	// If using the legacy library voice that requires paid subscription, redirect to Jessica
 	if voice == LegacyLibraryVoiceRachel {
 		return DefaultVoiceFern
 	}
@@ -79,19 +77,17 @@ func ResolveVoiceID(p *Personality) string {
 		return voice
 	}
 
-	// Match by ID or Name defaults
 	switch strings.ToLower(p.ID) {
 	case "spike":
 		return DefaultVoiceSpike
 	case "fern":
 		return DefaultVoiceFern
 	default:
-		// Default to Jessica if not matched
 		return DefaultVoiceFern
 	}
 }
 
-// Speak converts text into speech and plays it through the system's audio output.
+// Speak says text in the personality's voice on this computer's speakers.
 func (tm *TTSManager) Speak(ctx context.Context, p *Personality, text string) error {
 	cleanText := CleanSpokenText(p.Name, text)
 	if cleanText == "" {
@@ -100,16 +96,16 @@ func (tm *TTSManager) Speak(ctx context.Context, p *Personality, text string) er
 
 	voiceID := ResolveVoiceID(p)
 
-	audioStream, err := tm.client.TTS().Simple(ctx, voiceID, cleanText)
+	audioStream, err := tm.Client.TTS().Simple(ctx, voiceID, cleanText)
 	if err != nil {
-		// If custom voice failed (e.g. library voice requiring paid plan), attempt fallback
+		// A voice this account can't use (like a paid one): try the default instead.
 		fallbackID := DefaultVoiceFern
 		if strings.EqualFold(p.ID, "spike") {
 			fallbackID = DefaultVoiceSpike
 		}
 		if voiceID != fallbackID {
 			fmt.Printf("⚠️  [Voice %s failed (%v); falling back to default voice]\n", voiceID, err)
-			audioStream, err = tm.client.TTS().Simple(ctx, fallbackID, cleanText)
+			audioStream, err = tm.Client.TTS().Simple(ctx, fallbackID, cleanText)
 		}
 	}
 
@@ -117,7 +113,6 @@ func (tm *TTSManager) Speak(ctx context.Context, p *Personality, text string) er
 		return fmt.Errorf("TTS generation failed: %w", err)
 	}
 
-	// Save to a temporary MP3 file for playback
 	tmpFile, err := os.CreateTemp("", fmt.Sprintf("voice_%s_*.mp3", p.ID))
 	if err != nil {
 		return fmt.Errorf("failed to create temp audio file: %w", err)
@@ -131,11 +126,9 @@ func (tm *TTSManager) Speak(ctx context.Context, p *Personality, text string) er
 	}
 	tmpFile.Close()
 
-	// Play audio through system player
 	return playAudioFile(tmpPath)
 }
 
-// playAudioFile plays the specified audio file using native OS utilities.
 func playAudioFile(filePath string) error {
 	var cmd *exec.Cmd
 

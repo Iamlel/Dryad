@@ -1,12 +1,9 @@
 package main
 
-// Talking to a plant: the website uploads a voice recording to
-// POST /api/talk/{id} and gets a job back. One at a time, in the order they
-// came in, the server turns each recording into text (ElevenLabs), asks
-// Gemini for the plant's answer in its personality (personalities.json),
-// knowing its live readings, and turns the answer into the plant's voice
-// (ElevenLabs). The page asks GET /api/talk/jobs/{job} until the answer is
-// ready, then plays GET /api/talk/jobs/{job}/voice.
+// Talking to a plant. The website uploads a recording and gets a job ID. Jobs
+// run one at a time: ElevenLabs turns the recording into text, Gemini answers
+// as the plant (knowing its live readings), and ElevenLabs speaks the answer.
+// The page polls the job, then plays its voice.
 
 import (
 	"context"
@@ -20,6 +17,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"dryad/ai"
+	"dryad/plants"
+	"dryad/sensors"
 
 	elstt "github.com/plexusone/elevenlabs-go/stt"
 )
@@ -48,7 +49,7 @@ type talkJob struct {
 	Error    string `json:"error,omitempty"`
 
 	seq      int
-	plant    Plant
+	plant    plants.Plant
 	audio    []byte // the recording, until it's been heard
 	ctype    string
 	voice    []byte // the answer, as MP3
@@ -57,38 +58,38 @@ type talkJob struct {
 
 // Talker runs the conversations. It's off (nil clients) when the keys aren't set.
 type Talker struct {
-	stt     *STTManager
-	gemini  *GeminiBackend
-	tts     *TTSManager
-	sensors *LatestReading
+	stt     *ai.STTManager
+	gemini  *ai.GeminiBackend
+	tts     *ai.TTSManager
+	sensors *sensors.LatestReading
 	queue   chan *talkJob
 
 	mu      sync.Mutex
 	jobs    map[string]*talkJob
 	nextSeq int
 
-	history map[string][]ChatMessage // per plant; only the worker touches it
+	history map[string][]ai.ChatMessage // per plant; only the worker touches it
 }
 
-func newTalker(sensors *LatestReading) *Talker {
+func newTalker(sensors *sensors.LatestReading) *Talker {
 	t := &Talker{sensors: sensors, queue: make(chan *talkJob, queueLen),
-		jobs: map[string]*talkJob{}, history: map[string][]ChatMessage{}}
-	geminiKey, elevenKey := getAPIKey(), getElevenLabsKey()
+		jobs: map[string]*talkJob{}, history: map[string][]ai.ChatMessage{}}
+	geminiKey, elevenKey := ai.GetAPIKey(), ai.GetElevenLabsKey()
 	if geminiKey == "" || elevenKey == "" {
 		log.Print("talk: GEMINI_API_KEY or ELEVENLABS_API_KEY isn't set, so talking to plants is off")
 		return t
 	}
-	gemini, err := NewGeminiBackend(geminiKey, envOr("GEMINI_MODEL", loadKeyFromEnvFile(".env", "GEMINI_MODEL")))
+	gemini, err := ai.NewGeminiBackend(geminiKey, envOr("GEMINI_MODEL", ai.LoadKeyFromEnvFile(".env", "GEMINI_MODEL")))
 	if err != nil {
 		log.Printf("talk: %v", err)
 		return t
 	}
-	stt, err := NewSTTManager(elevenKey)
+	stt, err := ai.NewSTTManager(elevenKey)
 	if err != nil {
 		log.Printf("talk: %v", err)
 		return t
 	}
-	tts, err := NewTTSManager(elevenKey)
+	tts, err := ai.NewTTSManager(elevenKey)
 	if err != nil {
 		log.Printf("talk: %v", err)
 		return t
@@ -101,9 +102,8 @@ func newTalker(sensors *LatestReading) *Talker {
 
 func (t *Talker) On() bool { return t.gemini != nil }
 
-// Submit queues a recording (audio, of type contentType) for plant p and
-// returns its job's ID.
-func (t *Talker) Submit(p Plant, audio []byte, contentType string) (string, error) {
+// Submit queues a recording for plant p and returns the job ID.
+func (t *Talker) Submit(p plants.Plant, audio []byte, contentType string) (string, error) {
 	b := make([]byte, 16)
 	rand.Read(b)
 	id := hex.EncodeToString(b)
@@ -177,12 +177,12 @@ func (t *Talker) work() {
 	}
 }
 
-// answer hears the recording, thinks of the plant's answer and says it.
+// answer transcribes the recording, gets the plant's reply and voices it.
 func (t *Talker) answer(job *talkJob) (heard, answer string, voice []byte, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
-	res, err := t.stt.client.STT().Transcribe(ctx, &elstt.Request{
+	res, err := t.stt.Client.STT().Transcribe(ctx, &elstt.Request{
 		FileBytes: job.audio,
 		FileName:  "speech" + audioExt(job.ctype),
 		ModelID:   "scribe_v2",
@@ -206,8 +206,8 @@ func (t *Talker) answer(job *talkJob) (heard, answer string, voice []byte, err e
 	}
 	answer = strings.TrimSpace(answer)
 	t.history[p.ID] = lastN(append(t.history[p.ID],
-		ChatMessage{Role: "user", Content: heard},
-		ChatMessage{Role: "assistant", Content: answer}), historyLen)
+		ai.ChatMessage{Role: "user", Content: heard},
+		ai.ChatMessage{Role: "assistant", Content: answer}), historyLen)
 	log.Printf("talk: %s heard %q, answers %q", p.ID, heard, answer)
 
 	voice, err = t.say(ctx, persona, answer)
@@ -217,16 +217,16 @@ func (t *Talker) answer(job *talkJob) (heard, answer string, voice []byte, err e
 	return heard, answer, voice, nil
 }
 
-// say is the plant saying text in its ElevenLabs voice (tts.go), as MP3.
-func (t *Talker) say(ctx context.Context, persona *Personality, text string) ([]byte, error) {
-	words := CleanSpokenText(persona.Name, text)
-	audio, err := t.tts.client.TTS().Simple(ctx, ResolveVoiceID(persona), words)
-	if err != nil { // a voice this account can't use: fall back, like tts.go does
-		fallback := DefaultVoiceFern
+// say returns text in the plant's ElevenLabs voice, as MP3.
+func (t *Talker) say(ctx context.Context, persona *ai.Personality, text string) ([]byte, error) {
+	words := ai.CleanSpokenText(persona.Name, text)
+	audio, err := t.tts.Client.TTS().Simple(ctx, ai.ResolveVoiceID(persona), words)
+	if err != nil { // a voice this account can't use: fall back, like ai/tts.go does
+		fallback := ai.DefaultVoiceFern
 		if strings.EqualFold(persona.ID, "spike") {
-			fallback = DefaultVoiceSpike
+			fallback = ai.DefaultVoiceSpike
 		}
-		audio, err = t.tts.client.TTS().Simple(ctx, fallback, words)
+		audio, err = t.tts.Client.TTS().Simple(ctx, fallback, words)
 	}
 	if err != nil {
 		return nil, err
@@ -234,23 +234,21 @@ func (t *Talker) say(ctx context.Context, persona *Personality, text string) ([]
 	return io.ReadAll(audio)
 }
 
-// personaFor is the plant's personality from personalities.json, or a
-// plain one when the plant doesn't have one.
-func personaFor(p Plant) *Personality {
-	if list, err := LoadPersonalities(); err == nil {
+// personaFor is the plant's personality, or a plain one if it has none.
+func personaFor(p plants.Plant) *ai.Personality {
+	if list, err := ai.LoadPersonalities(); err == nil {
 		for _, persona := range list {
 			if strings.EqualFold(persona.ID, p.ID) {
 				return persona
 			}
 		}
 	}
-	return &Personality{ID: p.ID, Name: p.Name,
+	return &ai.Personality{ID: p.ID, Name: p.Name,
 		Instruction: "You are " + p.Name + ", a houseplant. Keep spoken responses under two sentences."}
 }
 
-// senses tells the plant how it's doing right now, so it answers from its
-// real soil, light and air rather than making them up.
-func senses(p Plant, r Reading, ok bool) string {
+// senses gives the plant its real readings so it doesn't make them up.
+func senses(p plants.Plant, r sensors.Reading, ok bool) string {
 	if !ok || r.Stale() {
 		return "Your sensors aren't reporting right now, so you can't feel your soil, light or air."
 	}
@@ -288,7 +286,7 @@ func audioExt(contentType string) string {
 	return ".webm"
 }
 
-func lastN(m []ChatMessage, n int) []ChatMessage {
+func lastN(m []ai.ChatMessage, n int) []ai.ChatMessage {
 	if len(m) > n {
 		return m[len(m)-n:]
 	}

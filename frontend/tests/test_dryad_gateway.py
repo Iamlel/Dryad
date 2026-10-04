@@ -1,3 +1,4 @@
+"""Tests for the website's gateway (app.py), with the Go API mocked out."""
 import sys
 import unittest
 from pathlib import Path

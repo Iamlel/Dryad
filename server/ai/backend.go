@@ -1,4 +1,6 @@
-package main
+// Package ai makes the plants talk: Gemini or a local LM Studio model answers
+// in character, and ElevenLabs handles the voices and speech to text.
+package ai
 
 import (
 	"bytes"
@@ -22,13 +24,12 @@ const (
 	BackendLMStudio BackendType = "lmstudio"
 )
 
-// ChatMessage represents a single message in a multi-turn conversation.
 type ChatMessage struct {
 	Role    string `json:"role"` // "system", "user", "assistant"
 	Content string `json:"content"`
 }
 
-// AIBackend defines the interface implemented by both cloud Gemini and local LM Studio.
+// AIBackend is implemented by GeminiBackend and LMStudioBackend.
 type AIBackend interface {
 	Type() BackendType
 	DisplayName() string
@@ -37,10 +38,6 @@ type AIBackend interface {
 	Chat(ctx context.Context, persona *Personality, history []ChatMessage, userMessage string) (string, error)
 	UpdateMemory(ctx context.Context, persona *Personality, sessionTurns []string) error
 }
-
-// -------------------------------------------------------------
-// Gemini Backend Implementation
-// -------------------------------------------------------------
 
 type GeminiBackend struct {
 	client    *genai.Client
@@ -85,6 +82,7 @@ func (g *GeminiBackend) Ping(ctx context.Context) error {
 	return nil
 }
 
+// Chat returns the personality's reply, retrying twice when Gemini is busy (503).
 func (g *GeminiBackend) Chat(ctx context.Context, persona *Personality, history []ChatMessage, userMessage string) (string, error) {
 	model := g.client.GenerativeModel(g.modelName)
 	sysInstruction := BuildSystemInstruction(persona)
@@ -142,12 +140,9 @@ func (g *GeminiBackend) UpdateMemory(ctx context.Context, persona *Personality, 
 	return UpdateMemory(ctx, g.client, g.modelName, persona, sessionTurns)
 }
 
-// -------------------------------------------------------------
-// LM Studio Backend Implementation (OpenAI-compatible local server)
-// -------------------------------------------------------------
-
+// LMStudioBackend talks to LM Studio's OpenAI-compatible local server.
 type LMStudioBackend struct {
-	baseURL    string
+	BaseURL    string
 	modelName  string
 	httpClient *http.Client
 }
@@ -169,7 +164,7 @@ func NewLMStudioBackend(baseURL, modelName string) *LMStudioBackend {
 	}
 
 	return &LMStudioBackend{
-		baseURL:   baseURL,
+		BaseURL:   baseURL,
 		modelName: modelName,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
@@ -182,7 +177,7 @@ func (l *LMStudioBackend) Type() BackendType {
 }
 
 func (l *LMStudioBackend) DisplayName() string {
-	return fmt.Sprintf("🏠 Local LM Studio (%s @ %s)", l.modelName, l.baseURL)
+	return fmt.Sprintf("🏠 Local LM Studio (%s @ %s)", l.modelName, l.BaseURL)
 }
 
 func (l *LMStudioBackend) ModelName() string {
@@ -193,13 +188,13 @@ func (l *LMStudioBackend) Ping(ctx context.Context) error {
 	pingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(pingCtx, "GET", l.baseURL+"/v1/models", nil)
+	req, err := http.NewRequestWithContext(pingCtx, "GET", l.BaseURL+"/v1/models", nil)
 	if err != nil {
 		return err
 	}
 	resp, err := l.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("unable to reach LM Studio at %s: %w", l.baseURL, err)
+		return fmt.Errorf("unable to reach LM Studio at %s: %w", l.BaseURL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
@@ -208,6 +203,7 @@ func (l *LMStudioBackend) Ping(ctx context.Context) error {
 	return nil
 }
 
+// The parts of the OpenAI chat completions API that LM Studio speaks.
 type openAIChatRequest struct {
 	Model       string        `json:"model"`
 	Messages    []ChatMessage `json:"messages"`
@@ -230,21 +226,18 @@ type openAIChatResponse struct {
 	} `json:"error,omitempty"`
 }
 
+// Chat returns the personality's reply without the model's <think> section.
 func (l *LMStudioBackend) Chat(ctx context.Context, persona *Personality, history []ChatMessage, userMessage string) (string, error) {
-	// Construct the full prompt messages
 	var messages []ChatMessage
 
-	// System instruction
 	sysInstruction := BuildSystemInstruction(persona)
 	messages = append(messages, ChatMessage{
 		Role:    "system",
 		Content: sysInstruction,
 	})
 
-	// Accumulated history
 	messages = append(messages, history...)
 
-	// Current user turn
 	messages = append(messages, ChatMessage{
 		Role:    "user",
 		Content: userMessage,
@@ -254,7 +247,7 @@ func (l *LMStudioBackend) Chat(ctx context.Context, persona *Personality, histor
 		Model:       l.modelName,
 		Messages:    messages,
 		Temperature: 0.7,
-		MaxTokens:   1500, // accommodate reasoning tokens + reply
+		MaxTokens:   1500, // room for reasoning tokens and the reply
 	}
 
 	data, err := json.Marshal(reqBody)
@@ -262,7 +255,7 @@ func (l *LMStudioBackend) Chat(ctx context.Context, persona *Personality, histor
 		return "", fmt.Errorf("failed to encode request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", l.baseURL+"/v1/chat/completions", bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, "POST", l.BaseURL+"/v1/chat/completions", bytes.NewReader(data))
 	if err != nil {
 		return "", err
 	}
@@ -301,6 +294,7 @@ func (l *LMStudioBackend) Chat(ctx context.Context, persona *Personality, histor
 	return strings.TrimSpace(reply), nil
 }
 
+// UpdateMemory does what UpdateMemory in personality.go does, through LM Studio.
 func (l *LMStudioBackend) UpdateMemory(ctx context.Context, p *Personality, sessionTurns []string) error {
 	if len(sessionTurns) == 0 {
 		return nil
@@ -346,7 +340,7 @@ Guidelines:
 		return fmt.Errorf("failed to encode memory request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", l.baseURL+"/v1/chat/completions", bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, "POST", l.BaseURL+"/v1/chat/completions", bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -380,7 +374,7 @@ Guidelines:
 	return nil
 }
 
-// StripThinkingTags removes any internal <think>...</think> tags if present in model output.
+// StripThinkingTags removes <think>...</think> reasoning from a model's output.
 func StripThinkingTags(s string) string {
 	for {
 		start := strings.Index(s, "<think>")

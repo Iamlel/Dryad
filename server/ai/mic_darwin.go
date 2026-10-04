@@ -1,6 +1,10 @@
 //go:build darwin
 
-package main
+package ai
+
+// Mac microphone capture through CoreAudio (the C code below). CoreAudio fills
+// four 100 ms buffers of 16 kHz mono PCM in turn, and goAudioCallback passes
+// each full one to the channel StartMicrophoneCapture returned.
 
 /*
 #cgo LDFLAGS: -framework AudioToolbox -framework CoreAudio
@@ -100,7 +104,7 @@ func goAudioCallback(data unsafe.Pointer, size C.int) {
 	}
 }
 
-// StartMicrophoneCapture starts capturing 16kHz 16-bit mono PCM from the default microphone.
+// StartMicrophoneCapture records 16 kHz 16-bit mono PCM from the default microphone.
 func StartMicrophoneCapture(ctx context.Context) (<-chan []byte, func(), error) {
 	activeAudioChanMu.Lock()
 	ch := make(chan []byte, 100)

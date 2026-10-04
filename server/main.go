@@ -1,3 +1,6 @@
+// Dryad's server. The board runs it with -headless, which starts only the
+// sensor bridge and the HTTP API. Without that flag you also get a terminal
+// chat with the plants, typed or spoken (on a Mac).
 package main
 
 import (
@@ -9,97 +12,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"dryad/ai"
 )
 
-// getAPIKey looks for the Gemini API key in environment variables,
-// .env file, or a dedicated key file.
-func getAPIKey() string {
-	if key := os.Getenv("GEMINI_API_KEY"); key != "" {
-		return key
-	}
-	if key := os.Getenv("GOOGLE_API_KEY"); key != "" {
-		return key
-	}
-
-	if key := loadKeyFromEnvFile(".env", "GEMINI_API_KEY", "GOOGLE_API_KEY"); key != "" {
-		return key
-	}
-
-	candidates := []string{"api_key.txt", "key.txt", "gemini_key.txt"}
-	for _, filename := range candidates {
-		if content, err := os.ReadFile(filename); err == nil {
-			trimmed := strings.TrimSpace(string(content))
-			if trimmed != "" {
-				return trimmed
-			}
-		}
-	}
-
-	return ""
-}
-
-// getElevenLabsKey looks for the ElevenLabs API key in environment variables,
-// .env file, or a dedicated key file.
-func getElevenLabsKey() string {
-	if key := os.Getenv("ELEVENLABS_API_KEY"); key != "" {
-		return key
-	}
-	if key := os.Getenv("XI_API_KEY"); key != "" {
-		return key
-	}
-
-	if key := loadKeyFromEnvFile(".env", "ELEVENLABS_API_KEY", "XI_API_KEY"); key != "" {
-		return key
-	}
-
-	candidates := []string{"elevenlabs_key.txt", "xi_key.txt"}
-	for _, filename := range candidates {
-		if content, err := os.ReadFile(filename); err == nil {
-			trimmed := strings.TrimSpace(string(content))
-			if trimmed != "" {
-				return trimmed
-			}
-		}
-	}
-
-	return ""
-}
-
-func loadKeyFromEnvFile(filename string, targetKeys ...string) string {
-	file, err := os.Open(filename)
-	if err != nil {
-		if !strings.HasPrefix(filename, "..") {
-			file, err = os.Open("../" + filename)
-			if err != nil {
-				return ""
-			}
-		} else {
-			return ""
-		}
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) == 2 {
-			k := strings.TrimSpace(parts[0])
-			v := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
-			for _, target := range targetKeys {
-				if strings.EqualFold(k, target) && v != "" {
-					return v
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func toggleOrSelectBackend(scanner *bufio.Scanner, current AIBackend, gemini *GeminiBackend, lm *LMStudioBackend) AIBackend {
+// toggleOrSelectBackend switches between Gemini and a local LM Studio model.
+func toggleOrSelectBackend(scanner *bufio.Scanner, current ai.AIBackend, gemini *ai.GeminiBackend, lm *ai.LMStudioBackend) ai.AIBackend {
 	fmt.Println("\n----------------------------------------")
 	fmt.Println(" Switch AI Backend:")
 	fmt.Println("----------------------------------------")
@@ -108,7 +26,7 @@ func toggleOrSelectBackend(scanner *bufio.Scanner, current AIBackend, gemini *Ge
 	} else {
 		fmt.Println("  [1] Google Gemini (Unavailable: GEMINI_API_KEY not set)")
 	}
-	fmt.Printf("  [2] Local LM Studio (%s @ %s)\n", lm.ModelName(), lm.baseURL)
+	fmt.Printf("  [2] Local LM Studio (%s @ %s)\n", lm.ModelName(), lm.BaseURL)
 	fmt.Print("\nEnter choice [1 or 2, or press Enter to toggle]: ")
 
 	if !scanner.Scan() {
@@ -116,7 +34,7 @@ func toggleOrSelectBackend(scanner *bufio.Scanner, current AIBackend, gemini *Ge
 	}
 	ans := strings.TrimSpace(scanner.Text())
 
-	var target AIBackend
+	var target ai.AIBackend
 	switch ans {
 	case "1":
 		if gemini == nil {
@@ -127,8 +45,7 @@ func toggleOrSelectBackend(scanner *bufio.Scanner, current AIBackend, gemini *Ge
 	case "2":
 		target = lm
 	case "":
-		// Quick toggle
-		if current.Type() == BackendGemini {
+		if current.Type() == ai.BackendGemini {
 			target = lm
 		} else {
 			if gemini == nil {
@@ -142,8 +59,8 @@ func toggleOrSelectBackend(scanner *bufio.Scanner, current AIBackend, gemini *Ge
 		return current
 	}
 
-	if target.Type() == BackendLMStudio {
-		fmt.Printf("Pinging LM Studio at %s...\n", lm.baseURL)
+	if target.Type() == ai.BackendLMStudio {
+		fmt.Printf("Pinging LM Studio at %s...\n", lm.BaseURL)
 		if err := lm.Ping(context.Background()); err != nil {
 			fmt.Printf("LM Studio check failed: %v\n", err)
 			fmt.Println("Make sure LM Studio has started a local server on port 1234.")
@@ -160,7 +77,9 @@ func toggleOrSelectBackend(scanner *bufio.Scanner, current AIBackend, gemini *Ge
 	return target
 }
 
-func selectOrMakePersonality(scanner *bufio.Scanner, list []*Personality, current AIBackend, gemini *GeminiBackend, lm *LMStudioBackend) (*Personality, []*Personality, AIBackend) {
+// selectOrMakePersonality is the start menu. New personalities are saved to
+// personalities.json.
+func selectOrMakePersonality(scanner *bufio.Scanner, list []*ai.Personality, current ai.AIBackend, gemini *ai.GeminiBackend, lm *ai.LMStudioBackend) (*ai.Personality, []*ai.Personality, ai.AIBackend) {
 	for {
 		fmt.Println("\n========================================")
 		fmt.Println(" Choose a Personality to Chat With:")
@@ -197,7 +116,6 @@ func selectOrMakePersonality(scanner *bufio.Scanner, list []*Personality, curren
 		}
 
 		if choice == len(list)+1 {
-			// Create new
 			fmt.Print("\nEnter Personality Name (e.g. Daisy): ")
 			if !scanner.Scan() {
 				return nil, list, current
@@ -225,7 +143,7 @@ func selectOrMakePersonality(scanner *bufio.Scanner, list []*Personality, curren
 			}
 			voiceID := strings.TrimSpace(scanner.Text())
 
-			newP := &Personality{
+			newP := &ai.Personality{
 				ID:          strings.ToLower(strings.ReplaceAll(name, " ", "_")),
 				Name:        name,
 				Tagline:     tagline,
@@ -234,7 +152,7 @@ func selectOrMakePersonality(scanner *bufio.Scanner, list []*Personality, curren
 				VoiceID:     voiceID,
 			}
 			list = append(list, newP)
-			_ = SavePersonalities(list)
+			_ = ai.SavePersonalities(list)
 			fmt.Printf("Personality '%s' created!\n", name)
 			return newP, list, current
 		}
@@ -260,9 +178,11 @@ func main() {
 	flag.Parse()
 	serverErr := startPlantServer() // see httpapi.go
 	if *headless {
-		log.Fatal(<-serverErr) // the server only stops on failure; systemd restarts it
+		log.Fatal(<-serverErr) // the server only stops on failure; keep-running.sh restarts it
 	}
 
+	// The rest is the terminal chat. Its flags are also matched by hand, so any
+	// capitalization works.
 	forceVoice := *voiceFlag
 	forceLocal := false
 	forceGemini := false
@@ -280,7 +200,8 @@ func main() {
 		}
 	}
 
-	geminiKey := getAPIKey()
+	// GEMINI_MODEL, LM_STUDIO_URL and LM_STUDIO_MODEL override the defaults.
+	geminiKey := ai.GetAPIKey()
 	modelName := os.Getenv("GEMINI_MODEL")
 	if modelName == "" {
 		modelName = "models/gemini-3.8-flash"
@@ -288,7 +209,7 @@ func main() {
 
 	lmStudioURL := os.Getenv("LM_STUDIO_URL")
 	if lmStudioURL == "" {
-		lmStudioURL = loadKeyFromEnvFile(".env", "LM_STUDIO_URL")
+		lmStudioURL = ai.LoadKeyFromEnvFile(".env", "LM_STUDIO_URL")
 		if lmStudioURL == "" {
 			lmStudioURL = "http://127.0.0.1:1234"
 		}
@@ -296,19 +217,17 @@ func main() {
 
 	lmStudioModel := os.Getenv("LM_STUDIO_MODEL")
 	if lmStudioModel == "" {
-		lmStudioModel = loadKeyFromEnvFile(".env", "LM_STUDIO_MODEL")
+		lmStudioModel = ai.LoadKeyFromEnvFile(".env", "LM_STUDIO_MODEL")
 		if lmStudioModel == "" {
 			lmStudioModel = "google/gemma-4-e4b"
 		}
 	}
 
-	// Initialize LM Studio backend
-	lmStudioBackend := NewLMStudioBackend(lmStudioURL, lmStudioModel)
+	lmStudioBackend := ai.NewLMStudioBackend(lmStudioURL, lmStudioModel)
 
-	// Initialize Gemini backend if key is present
-	var geminiBackend *GeminiBackend
+	var geminiBackend *ai.GeminiBackend
 	if geminiKey != "" {
-		gb, err := NewGeminiBackend(geminiKey, modelName)
+		gb, err := ai.NewGeminiBackend(geminiKey, modelName)
 		if err != nil {
 			fmt.Printf("Gemini client initialization warning: %v\n", err)
 		} else {
@@ -316,16 +235,16 @@ func main() {
 		}
 	}
 
-	// Determine starting AI backend
+	// The flags win, then AI_PROVIDER, then Gemini if there's a key.
 	providerEnv := strings.ToLower(os.Getenv("AI_PROVIDER"))
 	if providerEnv == "" {
 		providerEnv = strings.ToLower(os.Getenv("AI_BACKEND"))
 	}
 	if providerEnv == "" {
-		providerEnv = strings.ToLower(loadKeyFromEnvFile(".env", "AI_PROVIDER", "AI_BACKEND"))
+		providerEnv = strings.ToLower(ai.LoadKeyFromEnvFile(".env", "AI_PROVIDER", "AI_BACKEND"))
 	}
 
-	var activeBackend AIBackend
+	var activeBackend ai.AIBackend
 	if forceLocal || providerEnv == "local" || providerEnv == "lmstudio" {
 		activeBackend = lmStudioBackend
 	} else if forceGemini || providerEnv == "gemini" {
@@ -336,7 +255,6 @@ func main() {
 			activeBackend = lmStudioBackend
 		}
 	} else {
-		// Default behavior: use Gemini if key configured, otherwise use LM Studio
 		if geminiBackend != nil {
 			activeBackend = geminiBackend
 		} else {
@@ -344,7 +262,6 @@ func main() {
 		}
 	}
 
-	// Verify at least one backend is available
 	if geminiBackend == nil {
 		if err := lmStudioBackend.Ping(context.Background()); err != nil {
 			fmt.Println("Error: No AI backend available.")
@@ -355,13 +272,14 @@ func main() {
 		fmt.Printf("Running in Local AI mode (LM Studio @ %s)\n", lmStudioURL)
 	}
 
-	elevenLabsKey := getElevenLabsKey()
-	var ttsManager *TTSManager
+	// ElevenLabs does the plant's voice and the speech to text.
+	elevenLabsKey := ai.GetElevenLabsKey()
+	var ttsManager *ai.TTSManager
 	ttsEnabled := false
-	var sttManager *STTManager
+	var sttManager *ai.STTManager
 
 	if elevenLabsKey != "" {
-		tm, err := NewTTSManager(elevenLabsKey)
+		tm, err := ai.NewTTSManager(elevenLabsKey)
 		if err != nil {
 			fmt.Printf("ElevenLabs TTS warning: %v\n", err)
 		} else {
@@ -370,7 +288,7 @@ func main() {
 			fmt.Println("ElevenLabs Voice Audio: Enabled")
 		}
 
-		sm, err := NewSTTManager(elevenLabsKey)
+		sm, err := ai.NewSTTManager(elevenLabsKey)
 		if err != nil {
 			fmt.Printf("ElevenLabs STT warning: %v\n", err)
 		} else {
@@ -385,16 +303,17 @@ func main() {
 
 	ctx := context.Background()
 
-	personalities, err := LoadPersonalities()
+	personalities, err := ai.LoadPersonalities()
 	if err != nil {
 		log.Fatalf("Failed to load personalities: %v", err)
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
 
+	// One chat session per personality: /switch goes back to the menu, exit quits.
 	for {
-		var persona *Personality
-		var updatedList []*Personality
+		var persona *ai.Personality
+		var updatedList []*ai.Personality
 		persona, updatedList, activeBackend = selectOrMakePersonality(scanner, personalities, activeBackend, geminiBackend, lmStudioBackend)
 		if persona == nil {
 			break
@@ -405,7 +324,7 @@ func main() {
 		voiceStatus := "Disabled (no ELEVENLABS_API_KEY)"
 		if ttsManager != nil {
 			if ttsEnabled {
-				voiceStatus = fmt.Sprintf("Enabled (%s)", ResolveVoiceID(persona)[:min(8, len(ResolveVoiceID(persona)))])
+				voiceStatus = fmt.Sprintf("Enabled (%s)", ai.ResolveVoiceID(persona)[:min(8, len(ai.ResolveVoiceID(persona)))])
 			} else {
 				voiceStatus = "Muted"
 			}
@@ -436,15 +355,17 @@ func main() {
 		fmt.Println("----------------------------------------")
 		fmt.Println()
 
+		// history goes to the AI each turn; sessionTurns becomes the memory summary.
 		var sessionTurns []string
-		var history []ChatMessage
+		var history []ai.ChatMessage
 		exiting := false
 
 		for {
 			var input string
 
+			// Voice mode listens until you stop talking, and falls back to typing on errors.
 			if voiceMode && sttManager != nil {
-				spoken, err := RecordSpeechTurn(ctx, sttManager)
+				spoken, err := ai.RecordSpeechTurn(ctx, sttManager)
 				if err != nil {
 					fmt.Println()
 					fmt.Printf("Speech recognition note: %v\n", err)
@@ -473,7 +394,6 @@ func main() {
 				continue
 			}
 
-			// Handle commands
 			if strings.EqualFold(input, "exit") || strings.EqualFold(input, "quit") {
 				exiting = true
 				break
@@ -513,15 +433,15 @@ func main() {
 
 			if strings.EqualFold(input, "/clear-memory") {
 				persona.Memory = ""
-				_ = SavePersonalities(personalities)
+				_ = ai.SavePersonalities(personalities)
 				fmt.Printf("[Memory cleared for %s]\n\n", persona.Name)
 				continue
 			}
 
 			if strings.EqualFold(input, "/model") || strings.EqualFold(input, "/backend") {
-				if activeBackend.Type() == BackendGemini {
+				if activeBackend.Type() == ai.BackendGemini {
 					if err := lmStudioBackend.Ping(ctx); err != nil {
-						fmt.Printf("\n[Cannot connect to LM Studio at %s: %v]\n", lmStudioBackend.baseURL, err)
+						fmt.Printf("\n[Cannot connect to LM Studio at %s: %v]\n", lmStudioBackend.BaseURL, err)
 						fmt.Println("Make sure LM Studio local server is running on port 1234. Staying on Gemini.")
 						fmt.Println()
 						continue
@@ -586,12 +506,10 @@ func main() {
 
 			fmt.Println(replyStr)
 
-			// Record history for multi-turn conversation
-			history = append(history, ChatMessage{Role: "user", Content: input})
-			history = append(history, ChatMessage{Role: "assistant", Content: replyStr})
+			history = append(history, ai.ChatMessage{Role: "user", Content: input})
+			history = append(history, ai.ChatMessage{Role: "assistant", Content: replyStr})
 			sessionTurns = append(sessionTurns, fmt.Sprintf("%s: %s", persona.Name, replyStr))
 
-			// Play speech if TTS is active
 			if ttsManager != nil && ttsEnabled && replyStr != "" {
 				fmt.Printf("[Playing %s's voice...]\n", persona.Name)
 				if err := ttsManager.Speak(ctx, persona, replyStr); err != nil {
@@ -601,13 +519,13 @@ func main() {
 			fmt.Println()
 		}
 
-		// Save updated memory if any turns happened
+		// After a session, the AI summarizes it into the personality's memory.
 		if len(sessionTurns) > 0 {
 			fmt.Printf("\n[Saving and updating memories for %s using %s...]\n", persona.Name, activeBackend.DisplayName())
 			if err := activeBackend.UpdateMemory(ctx, persona, sessionTurns); err != nil {
 				fmt.Printf("Warning: Could not summarize memories: %v\n", err)
 			} else {
-				if err := SavePersonalities(personalities); err != nil {
+				if err := ai.SavePersonalities(personalities); err != nil {
 					fmt.Printf("Warning: Could not save personality file: %v\n", err)
 				} else {
 					fmt.Printf("[Memories successfully updated and saved!]\n")

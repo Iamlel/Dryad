@@ -1,9 +1,6 @@
-package main
-
-// Caretaker rewards in test SOL on Solana devnet (no real money). The
-// caretaker's wallet address comes in through POST /api/caretaker, and each
-// time they water the plant, moving it from thirsty back into its healthy
-// range, the server pays them from its own treasury wallet.
+// Package rewards pays the caretaker 0.01 test SOL on Solana devnet each time
+// they water a thirsty plant back into its range.
+package rewards
 
 import (
 	"context"
@@ -18,6 +15,9 @@ import (
 	"github.com/gagliardetto/solana-go/programs/system"
 	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/gagliardetto/solana-go/rpc/jsonrpc"
+
+	"dryad/plants"
+	"dryad/sensors"
 )
 
 const (
@@ -33,11 +33,10 @@ const (
 )
 
 var (
-	errRewardsOff = errors.New("rewards are off: set SOLANA_TREASURY_KEY in server/.env")
+	ErrRewardsOff = errors.New("rewards are off: set SOLANA_TREASURY_KEY in server/.env")
 	errBadWallet  = errors.New("that isn't a Solana wallet address")
 )
 
-// Payout is one reward sent.
 type Payout struct {
 	At          time.Time `json:"at"`
 	Wallet      string    `json:"wallet"`
@@ -60,17 +59,16 @@ type Rewards struct {
 
 	mu       sync.Mutex
 	wallet   solana.PublicKey // zero until a wallet is set
-	plant    Plant            // its thresholds judge the watering
+	plant    plants.Plant     // its thresholds judge the watering
 	thirsty  bool             // moisture went below the minimum and hasn't been rewarded yet
 	lastPaid time.Time
 	payouts  []Payout
 }
 
-// newRewards pays from the treasury wallet whose base58 private key is
-// treasuryKey (the format Phantom exports). It only ever talks to devnet,
-// whose SOL is free test money, so no real money can move.
-func newRewards(treasuryKey string) (*Rewards, error) {
-	rw := &Rewards{plant: defaultPlant}
+// NewRewards pays from the wallet whose base58 private key is treasuryKey (as
+// Phantom exports it). It only talks to devnet, so no real money moves.
+func NewRewards(treasuryKey string) (*Rewards, error) {
+	rw := &Rewards{plant: plants.DefaultPlant}
 	if treasuryKey == "" {
 		log.Print("rewards: SOLANA_TREASURY_KEY isn't set, so rewards are off")
 		return rw, nil
@@ -87,7 +85,7 @@ func newRewards(treasuryKey string) (*Rewards, error) {
 func (rw *Rewards) On() bool { return rw.treasury != nil }
 
 // SetCaretaker makes wallet the one paid for watering p.
-func (rw *Rewards) SetCaretaker(wallet string, p Plant) error {
+func (rw *Rewards) SetCaretaker(wallet string, p plants.Plant) error {
 	key, err := solana.PublicKeyFromBase58(strings.TrimSpace(wallet))
 	if err != nil {
 		return errBadWallet
@@ -112,8 +110,8 @@ func (rw *Rewards) State() caretakerState {
 	return st
 }
 
-// watch checks the latest reading every second and pays for each watering.
-func (rw *Rewards) watch(sensors *LatestReading) {
+// Watch checks the latest reading every second and pays for each watering.
+func (rw *Rewards) Watch(sensors *sensors.LatestReading) {
 	if !rw.On() {
 		return
 	}
@@ -128,7 +126,7 @@ func (rw *Rewards) watch(sensors *LatestReading) {
 
 // watered reports whether reading r completes a watering that earns a
 // reward, and if so, who gets it.
-func (rw *Rewards) watered(r Reading) (solana.PublicKey, bool) {
+func (rw *Rewards) watered(r sensors.Reading) (solana.PublicKey, bool) {
 	rw.mu.Lock()
 	defer rw.mu.Unlock()
 	if rw.wallet.IsZero() || r.MoisturePct == nil {
@@ -150,7 +148,6 @@ func (rw *Rewards) watered(r Reading) (solana.PublicKey, bool) {
 	return solana.PublicKey{}, false
 }
 
-// pay sends the reward to wallet and records it.
 func (rw *Rewards) pay(wallet solana.PublicKey, moisturePct float64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

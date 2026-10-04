@@ -5,8 +5,8 @@
  * callbacks. Register map and compensation formula follow the SPA06-003
  * datasheet (same family as the Infineon DPS310 / Goertek SPL06).
  */
-#ifndef GROOT_SPA06_H
-#define GROOT_SPA06_H
+#ifndef DRYAD_SPA06_H
+#define DRYAD_SPA06_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -69,4 +69,4 @@ void  spa06_compensate(const spa06_calib_t *c, int32_t raw_p, int32_t raw_t, spa
 }
 #endif
 
-#endif /* GROOT_SPA06_H */
+#endif /* DRYAD_SPA06_H */
