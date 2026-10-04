@@ -8,14 +8,18 @@ package main
 //	GET /api/sensors      the latest raw reading
 //	GET /api/caretaker    the caretaker's wallet and the rewards paid
 //	POST /api/caretaker   set the caretaker's wallet
+//	POST /api/talk/{id}   a voice recording for the plant; returns a job
+//	GET /api/talk/jobs/{job}         the job: queued, working, or the answer
+//	GET /api/talk/jobs/{job}/voice   the answer in the plant's voice (MP3)
 //	GET /healthz          liveness and the deployed version
 //
-// Apart from the caretaker, it only reads; plants are added with
+// Apart from the caretaker and talking, it only reads; plants are added with
 // plants.sql. Errors are JSON: {"error": "..."}.
 
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -30,6 +34,7 @@ type server struct {
 	sensors *LatestReading
 	plants  *PlantStore
 	rewards *Rewards
+	talker  *Talker
 }
 
 // startPlantServer starts the sensor bridge and the HTTP API in the
@@ -44,7 +49,8 @@ func startPlantServer() <-chan error {
 	if err != nil {
 		log.Fatalf("rewards: bad SOLANA_TREASURY_KEY: %v", err)
 	}
-	s := &server{sensors: new(LatestReading), plants: plants, rewards: rewards}
+	sensors := new(LatestReading)
+	s := &server{sensors: sensors, plants: plants, rewards: rewards, talker: newTalker(sensors)}
 	go runBridge(envOr("GROOT_ROUTER", defaultRouterAddr), s.sensors)
 	go rewards.watch(s.sensors)
 
@@ -71,6 +77,9 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/sensors", s.getSensors)
 	mux.HandleFunc("GET /api/caretaker", s.getCaretaker)
 	mux.HandleFunc("POST /api/caretaker", s.setCaretaker)
+	mux.HandleFunc("POST /api/talk/{id}", s.talk)
+	mux.HandleFunc("GET /api/talk/jobs/{job}", s.talkJob)
+	mux.HandleFunc("GET /api/talk/jobs/{job}/voice", s.talkVoice)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
 	})
@@ -186,6 +195,62 @@ func (s *server) setCaretaker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.rewards.State())
+}
+
+// ---- Talking to a plant ----------------------------------------------------
+
+// talk queues a voice recording (the body, as the browser recorded it) and
+// answers 202 {"job": "..."}; the page then asks talkJob for the answer.
+func (s *server) talk(w http.ResponseWriter, r *http.Request) {
+	if !s.talker.On() {
+		writeError(w, http.StatusServiceUnavailable, errTalkOff.Error())
+		return
+	}
+	p, err := s.plants.Get(r.Context(), strings.ToLower(r.PathValue("id")))
+	if err != nil {
+		writePlantError(w, err)
+		return
+	}
+	audio, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20))
+	var tooBig *http.MaxBytesError
+	switch {
+	case errors.As(err, &tooBig):
+		writeError(w, http.StatusRequestEntityTooLarge, "that recording is too long")
+		return
+	case err != nil || len(audio) == 0:
+		writeError(w, http.StatusBadRequest, "the recording didn't arrive, try again")
+		return
+	}
+
+	job, err := s.talker.Submit(p, audio, r.Header.Get("Content-Type"))
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"job": job})
+}
+
+// talkJob is the job's state: {"status": "queued", "position": 2},
+// {"status": "working"}, {"status": "done", "heard": "...", "answer": "...",
+// "voice": true} or {"status": "failed", "error": "..."}.
+func (s *server) talkJob(w http.ResponseWriter, r *http.Request) {
+	state, _, ok := s.talker.Job(r.PathValue("job"))
+	if !ok {
+		writeError(w, http.StatusNotFound, errNoJob.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+
+// talkVoice is the answer in the plant's voice, once the job is done.
+func (s *server) talkVoice(w http.ResponseWriter, r *http.Request) {
+	_, voice, ok := s.talker.Job(r.PathValue("job"))
+	if !ok || voice == nil {
+		writeError(w, http.StatusNotFound, "no voice for that answer (yet)")
+		return
+	}
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Write(voice)
 }
 
 // ---- Helpers ---------------------------------------------------------------

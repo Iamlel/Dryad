@@ -36,6 +36,9 @@ matching status code.
 | `GET /api/plant/{id}` | For the UI: `moisture_pct`, `temperature_c`, `light_pct`, a `status` (`ok`, `thirsty`, `overwatered`, `cold`, `hot`, `dark` or `offline`) judged against that plant's thresholds, and a `dialog` line. `GET /api/plant` uses default houseplant thresholds. |
 | `GET /api/sensors` | The latest raw reading. |
 | `POST /api/caretaker` | Sets whose wallet gets the watering rewards: `{"wallet": "<Solana address>", "plant_id": "fern"}`. Without `plant_id`, the default thresholds judge the watering. It's kept in memory, so send it again after the server restarts. |
+| `POST /api/talk/{id}` | A voice recording for the plant (the body, as the browser recorded it). Queues it and answers `202 {"job": "..."}`; `503` when 20 are already waiting. |
+| `GET /api/talk/jobs/{job}` | `{"status": "queued", "position": 2}` (recordings ahead of it), `{"status": "working"}`, `{"status": "done", "heard": "...", "answer": "...", "voice": true}` or `{"status": "failed", "error": "..."}`. Answers are kept for 5 minutes. |
+| `GET /api/talk/jobs/{job}/voice` | The answer in the plant's voice, as MP3. |
 | `GET /api/caretaker` | The caretaker's `wallet` and `plant_id`, and the `payouts` sent so far (newest first), each with an `explorer_url`. |
 | `GET /healthz` | Liveness and the deployed version. |
 
@@ -66,6 +69,17 @@ devnet: test SOL, no real money. Set it up once:
 
 Until then the caretaker endpoints answer 503. To watch rewards arrive in
 Phantom, turn on Settings → Developer Settings → Testnet Mode (Solana Devnet).
+
+## Talking to the plants
+
+On the website, tap 🎙 under "How is my plant?", speak, tap again. The board
+answers everyone's recordings in turn: it turns each into text (ElevenLabs),
+the plant answers in its personality from `personalities.json`, knowing its
+live readings (Gemini), and the answer is turned into the plant's voice
+(ElevenLabs). The page asks for its answer every second (giving up after 90
+seconds), then shows it and plays it on the phone or laptop that recorded it.
+Needs `GEMINI_API_KEY` and `ELEVENLABS_API_KEY` in `server/.env`, and the site
+on HTTPS (your domain) for the browser to allow the microphone.
 
 ## Your domain (Cloudflare Tunnel)
 

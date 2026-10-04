@@ -37,7 +37,7 @@ function renderRoster() {
   }
 }
 function showPlant() {
-  text('plant-name',plant().name);text('tagline','A woodland spirit watching over '+plant().name+'.');
+  text('plant-name',plant().name);text('talk-name',plant().name);text('tagline','A woodland spirit watching over '+plant().name+'.');
   $('qr-link').href='/qr/'+encodeURIComponent(selected)+'.png';$('qr-link').hidden=false;
   $('ranges').replaceChildren();
   const p=plant(), range=(a,b,unit)=>number(a)&&number(b)?`${a}–${b}${unit}`:'Not provided';
@@ -82,6 +82,7 @@ function renderState(s) {
   text('updated',Number.isFinite(stamp)?'Measured '+new Date(stamp).toLocaleTimeString()+(stale?' · STALE':''):'Measurement time unavailable');
   notify(stale?'SENSOR OFFLINE / STALE · Displayed values are not current.':'LIVE · Polling every 1.5 seconds · Shared sensors, plant-specific care ranges',stale);
   text('mode',stale?'◌ Stale readings':'● Live readings');
+  talkButton();
   if(!stale) {
     const list=journals.get(selected)||[];
     if(!list.length||stamp>Date.parse(list.at(-1).updated_at)) {list.push({...s});if(list.length>100)list.shift();journals.set(selected,list);}
@@ -144,5 +145,77 @@ $('scan').onclick=async()=>{$('scanner').showModal();text('scan-status','Startin
   async function scan(){if(sg!==scannerGeneration)return;try{let raw;if(detector){const codes=await detector.detect($('camera'));raw=codes[0]?.rawValue;}else{canvas.width=$('camera').videoWidth;canvas.height=$('camera').videoHeight;if(canvas.width){ctx.drawImage($('camera'),0,0);const im=ctx.getImageData(0,0,canvas.width,canvas.height);raw=jsQR(im.data,im.width,im.height)?.data;}}if(raw){selectPlant(qrID(raw));$('scanner').close();return;}}catch(e){text('scan-status',e.message);}if(sg===scannerGeneration)cameraTimer=setTimeout(scan,250);}scan();
  }catch(e){if(sg===scannerGeneration){closeCamera();text('scan-status',e.message);}}};
 
-window.addEventListener('pagehide',()=>{closeCamera();controller?.abort();clearTimeout(timer);});
+// Talking to the plant: record with the mic and upload it. The board answers
+// everyone's recordings in turn; this page asks for its answer until it's
+// ready (giving up after a while), then shows it and plays the plant's voice.
+const TALK_MAX_MS=20000,ANSWER_WAIT_MS=90000;
+let recorder,talkTimer,player,waiting=false;
+const pause=ms=>new Promise(r=>setTimeout(r,ms));
+const sentence=s=>s.charAt(0).toUpperCase()+s.slice(1);
+function talkButton(){
+  const recording=recorder?.state==='recording';
+  $('talk').disabled=!recording&&(waiting||!selected);
+  $('talk').textContent=recording?'■ Stop and send':'🎙 Start talking';
+}
+function bubble(who,words,mine){
+  const b=document.createElement('p');b.className='bubble'+(mine?' user':'');
+  const name=document.createElement('strong');name.textContent=who;b.append(name,words);
+  $('messages').append(b);while($('messages').children.length>6)$('messages').firstChild.remove();
+  return b;
+}
+// Phones only play sound that a tap started, and the answer arrives seconds
+// after the tap. So the tap that sends the recording plays a moment of
+// silence on the player that will later play the answer.
+function unlockPlayer(){
+  const n=800,wav=new DataView(new ArrayBuffer(44+n*2)),ascii=(at,s)=>[...s].forEach((c,i)=>wav.setUint8(at+i,c.charCodeAt(0)));
+  ascii(0,'RIFF');wav.setUint32(4,36+n*2,true);ascii(8,'WAVEfmt ');wav.setUint32(16,16,true);wav.setUint16(20,1,true);wav.setUint16(22,1,true);
+  wav.setUint32(24,8000,true);wav.setUint32(28,16000,true);wav.setUint16(32,2,true);wav.setUint16(34,16,true);ascii(36,'data');wav.setUint32(40,n*2,true);
+  player=new Audio(URL.createObjectURL(new Blob([wav],{type:'audio/wav'})));player.play().catch(()=>{});
+}
+async function waitForAnswer(job,name){
+  const until=Date.now()+ANSWER_WAIT_MS;
+  while(Date.now()<until){
+    const s=await api('/api/talk/jobs/'+job);
+    if(s.status==='done')return s;
+    if(s.status==='failed')throw Error(s.error);
+    text('talk-status',s.status==='queued'&&s.position?`Waiting in line: ${s.position} ahead of you…`:'Listening and thinking…');
+    await pause(1000);
+  }
+  throw Error(name+' took too long to answer. Try again.');
+}
+async function sendRecording(blob,id,voice){
+  waiting=true;talkButton();text('talk-status','Sending…');
+  const name=plants.find(p=>p.id===id)?.name||'Your plant';
+  try{
+    const r=await fetch('/api/talk/'+encodeURIComponent(id),{method:'POST',body:blob,headers:{'Content-Type':blob.type||'application/octet-stream'}});
+    let data;try{data=await r.json();}catch{throw Error('The server returned an unreadable response.');}
+    if(!r.ok)throw Error(data.error||`Request failed (${r.status})`);
+    const s=await waitForAnswer(data.job,name);
+    bubble('You',s.heard,true);const b=bubble(name,s.answer);
+    if(!s.voice){text('talk-status',name+' couldn’t speak this time, but answered above.');return;}
+    voice.src='/api/talk/jobs/'+data.job+'/voice';voice.controls=true;voice.style.cssText='display:block;max-width:100%;margin-top:8px';b.append(voice);
+    voice.onended=()=>text('talk-status','Your turn: tap to talk.');
+    text('talk-status',name+' is talking…');
+    await voice.play().catch(()=>text('talk-status','Tap ▶ to hear '+name+'.'));
+  }catch(e){text('talk-status',sentence(e.message));}
+  finally{waiting=false;talkButton();}
+}
+$('talk').onclick=async()=>{
+  if(recorder?.state==='recording'){unlockPlayer();recorder.stop();return;}
+  try{
+    if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw Error('Recording needs HTTPS (open the site on its domain) and a browser that can record audio.');
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true}),id=selected,chunks=[];
+    recorder=new MediaRecorder(stream);
+    recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+    recorder.onstop=()=>{
+      clearTimeout(talkTimer);stream.getTracks().forEach(t=>t.stop());talkButton();
+      const blob=new Blob(chunks,{type:recorder.mimeType||'audio/webm'}),voice=player||new Audio();player=null;
+      if(blob.size)sendRecording(blob,id,voice);else text('talk-status','Nothing was recorded. Try again.');
+    };
+    recorder.start();talkTimer=setTimeout(()=>recorder.state==='recording'&&recorder.stop(),TALK_MAX_MS);
+    talkButton();text('talk-status','Recording… tap again when you’re done (20 seconds at most).');
+  }catch(e){text('talk-status',e.name==='NotAllowedError'?'Microphone permission was denied.':e.message);}
+};
+
+window.addEventListener('pagehide',()=>{closeCamera();controller?.abort();clearTimeout(timer);if(recorder?.state==='recording')recorder.stop();});
 poll();

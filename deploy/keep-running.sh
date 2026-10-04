@@ -6,6 +6,11 @@
 # crontab, so no sudo is needed; set up and restarted by deploy.sh.
 cd "$(dirname "$0")" || exit 1
 
+# When deploy.sh starts this over adb, TMPDIR is adb's Android temp folder,
+# which doesn't exist here.
+TMPDIR=/tmp
+export TMPDIR
+
 # The website reads the API on this board and serves every network
 # interface, so phones on the same WiFi can open it.
 while true; do
