@@ -1,0 +1,5 @@
+# Replace this hostname with your domain; point its DNS at this server.
+dryad.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:5000
+}
