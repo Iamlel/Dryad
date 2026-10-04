@@ -26,6 +26,9 @@ arduino_cache_*/
 .DS_Store
 # build output
 build/
+# the website's QR decoder and fonts, downloaded by deploy.sh
+frontend/static/vendor/
+frontend/static/fonts/
 # Secrets
 .env
 .env.*

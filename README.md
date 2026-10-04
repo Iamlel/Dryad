@@ -2,22 +2,27 @@
 Plant health detector on an Arduino UNO Q. The MCU reads light, soil moisture
 and temperature (`firmware/`) and sends a report every second over the
 RouterBridge to the Go server (`server/`), which runs on the board's Linux side
-and serves it over WiFi.
+and serves it over WiFi. The Flask website (`frontend/`) runs next to it on
+the board and shows it.
 
 ## Running it on the board
 
-Needs `go`, `arduino-cli` and `adb` on your machine, and the board on adb
-(USB or WiFi).
+Needs `go`, `python3` with pip, `arduino-cli` and `adb` on your machine, and
+the board on adb (USB or WiFi).
 
 ```bash
-./deploy.sh all        # flash the MCU + build/push the server
-./deploy.sh install    # once: start the server now and on every boot (no password needed)
-./deploy.sh            # after changing server code: rebuild, push, restart
+./deploy.sh all        # flash the MCU, then build, push and start the server and website
+./deploy.sh            # after changing server or website code: rebuild, push, restart
+./deploy.sh stop       # stop both; they stay off, even after a reboot, until ./deploy.sh
 ./deploy.sh watch      # live sensor readings
-./deploy.sh logs       # server log
+./deploy.sh logs       # server and website logs
 ```
 
-After `install`, everything runs off the board. It needs nothing but power.
+After a deploy, everything runs off the board and starts again on every boot
+(no password needed): the website on port 5000 and the API on port 8080. The
+board's Python has no pip, so the first deploy installs the website's packages
+on your machine (built for the board) and pushes them. It also downloads the
+page's QR decoder and fonts from npm into `frontend/static/` (not in git).
 
 ## API (port 8080)
 
@@ -61,6 +66,21 @@ devnet: test SOL, no real money. Set it up once:
 
 Until then the caretaker endpoints answer 503. To watch rewards arrive in
 Phantom, turn on Settings → Developer Settings → Testnet Mode (Solana Devnet).
+
+## Your domain (Cloudflare Tunnel)
+
+The board runs a Cloudflare tunnel, so phones anywhere can open the website on
+your domain over HTTPS. The tunnel connects out from the board, so it needs no
+IP or open ports, and keeps working when the board's address changes. Set it
+up once:
+
+1. In the Cloudflare dashboard (your domain has to be on Cloudflare), go to
+   Networking → Tunnels → Create a tunnel, name it and create it. Copy the
+   token out of the install command it shows.
+2. In the tunnel, Routes → Add route → Published application: pick a
+   subdomain and your domain, and set the Service URL to `http://localhost:5000`.
+3. Put `CLOUDFLARE_TUNNEL_TOKEN=<token>` in `server/.env` and run `./deploy.sh`,
+   which waits until the tunnel is connected.
 
 The server code is in `server/`: `bridge.go` (Arduino connection),
 `sensors.go`, `plants.go` (plants, status, Tiger Data), `rewards.go`
