@@ -5,7 +5,6 @@
 
 # Environment and key files
 .env
-.env.*
 *.key
 *.token
 key.txt

@@ -68,7 +68,14 @@ func getElevenLabsKey() string {
 func loadKeyFromEnvFile(filename string, targetKeys ...string) string {
 	file, err := os.Open(filename)
 	if err != nil {
-		return ""
+		if !strings.HasPrefix(filename, "..") {
+			file, err = os.Open("../" + filename)
+			if err != nil {
+				return ""
+			}
+		} else {
+			return ""
+		}
 	}
 	defer file.Close()
 
