@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 440" role="img" aria-label="Mythical dryad woodland spirit">
+<defs><linearGradient id="robe" x2="1" y2="1"><stop stop-color="#adc78b"/><stop offset="1" stop-color="#426b59"/></linearGradient><linearGradient id="hair" x2="1" y2="1"><stop stop-color="#53745d"/><stop offset="1" stop-color="#203f37"/></linearGradient><linearGradient id="skin" x2="0" y2="1"><stop stop-color="#ecd8a6"/><stop offset="1" stop-color="#c6b17c"/></linearGradient></defs>
+<ellipse cx="200" cy="420" rx="116" ry="12" fill="#315d49" opacity=".18"/>
+<path d="M198 52Q98 65 121 192L97 263Q123 293 156 259L249 263Q295 265 278 229L270 127Q272 56 198 52Z" fill="url(#hair)"/>
+<path d="M176 211Q164 246 147 286L99 403Q148 385 173 418L202 398L232 420Q252 393 302 404L252 281L227 215Z" fill="url(#robe)" stroke="#517755" stroke-width="3"/>
+<path d="M168 239Q141 230 123 258L83 276L63 264L55 276L82 294Q121 283 149 270M232 239Q258 231 276 258L312 242L319 255Q278 292 251 272" fill="none" stroke="#d1c18d" stroke-width="16" stroke-linecap="round"/>
+<path d="M166 153L130 140Q127 176 169 184M237 153L275 140Q278 178 236 185" fill="url(#skin)" stroke="#a39563" stroke-width="2"/>
+<path d="M155 123Q199 79 244 124L242 172Q237 214 201 223Q158 210 154 172Z" fill="url(#skin)"/>
+<path d="M141 134Q147 68 203 69Q263 85 255 140Q219 129 205 106Q186 140 141 148Z" fill="url(#hair)"/>
+<path d="M162 163Q173 152 183 163M217 163Q228 152 239 163" fill="none" stroke="#425642" stroke-width="4" stroke-linecap="round"/>
+<path d="M188 190Q200 201 213 190" fill="none" stroke="#897b55" stroke-width="3" stroke-linecap="round"/>
+<g fill="#8daa62" stroke="#536f49" stroke-width="2"><path d="M147 113Q102 95 118 69Q150 77 147 113Z"/><path d="M162 96Q133 56 157 43Q183 64 162 96Z"/><path d="M182 86Q163 33 195 27Q210 66 182 86Z"/><path d="M206 85Q205 35 236 43Q243 72 206 85Z"/><path d="M230 99Q244 56 272 71Q276 100 230 99Z"/><path d="M246 119Q277 89 292 115Q274 143 246 119Z"/></g>
+<g fill="none" stroke="#c5d59c" stroke-width="3" opacity=".65"><path d="M197 247Q186 330 168 386M209 246Q222 326 250 388M177 276L133 386M228 276L277 382"/></g>
+<path d="M177 231L200 261L225 230L202 236Z" fill="#d7dea1"/><circle cx="200" cy="247" r="5" fill="#e9ca77"/>
+<g fill="#e8d48c"><path d="M75 182L79 193L90 197L79 201L75 212L71 201L60 197L71 193Z"/><path d="M312 131L315 139L323 142L315 145L312 153L309 145L301 142L309 139Z"/><circle cx="324" cy="239" r="5"/><circle cx="90" cy="338" r="3"/></g>
+</svg>

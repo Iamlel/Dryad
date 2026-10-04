@@ -26,3 +26,26 @@ arduino_cache_*/
 .DS_Store
 # build output
 build/
+# Secrets
+.env
+.env.*
+!.env.example
+api_key.txt
+key.txt
+gemini_key.txt
+elevenlabs_key.txt
+xi_key.txt
+
+# Python environment and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Temporary files
+*.log
+*.zip
+recordings/
+.DS_Store
+Thumbs.db
